@@ -26,19 +26,19 @@ require_once __DIR__ . '/hud-helpers.php';
  * ]
  *
  * You will provide the actual builder function:
- *   alexk_build_one_derivative(array $item): true|string
+ *   alexk_press_build_one_derivative(array $item): true|string
  *     - return true on success
  *     - return string error message on failure
  */
 
 /** ---------- Locking (prevents concurrent pumps) ---------- */
 
-function alexk_job_lock_key(string $job_id): string {
-  return 'alexk_job_lock_' . preg_replace('/[^a-zA-Z0-9_\-]/', '', $job_id);
+function alexk_press_job_lock_key(string $job_id): string {
+  return 'alexk_press_job_lock_' . preg_replace('/[^a-zA-Z0-9_\-]/', '', $job_id);
 }
 
-function alexk_job_acquire_lock(string $job_id, int $ttl = 60): bool {
-  $key = alexk_job_lock_key($job_id);
+function alexk_press_job_acquire_lock(string $job_id, int $ttl = 60): bool {
+  $key = alexk_press_job_lock_key($job_id);
   $now = time();
 
   // add_option returns false if it already exists
@@ -63,15 +63,15 @@ function alexk_job_acquire_lock(string $job_id, int $ttl = 60): bool {
   return false;
 }
 
-function alexk_job_release_lock(string $job_id): void {
-  delete_option(alexk_job_lock_key($job_id));
+function alexk_press_job_release_lock(string $job_id): void {
+  delete_option(alexk_press_job_lock_key($job_id));
 }
 
 /** ---------- Scheduling (self-pump) ---------- */
 
-function alexk_job_schedule_next_pump(string $job_id): void {
+function alexk_press_job_schedule_next_pump(string $job_id): void {
   // Fire-and-forget request to admin-ajax pump endpoint
-  $url = admin_url('admin-ajax.php?action=alexk_job_pump&job_id=' . rawurlencode($job_id));
+  $url = admin_url('admin-ajax.php?action=alexk_press_job_pump&job_id=' . rawurlencode($job_id));
 
   wp_remote_get($url, [
     'timeout'   => 0.01,
@@ -86,15 +86,15 @@ function alexk_job_schedule_next_pump(string $job_id): void {
 
 /** ---------- Pump core ---------- */
 
-function alexk_job_do_pump(string $job_id, int $batch_size = 10): array {
-  $job = alexk_job_get($job_id);
+function alexk_press_job_do_pump(string $job_id, int $batch_size = 10): array {
+  $job = alexk_press_job_get($job_id);
   if (!$job) return ['ok' => false, 'error' => 'unknown job'];
 
   if (($job['status'] ?? '') !== 'running') {
     return ['ok' => true, 'msg' => 'job not running', 'job' => $job];
   }
 
-  if (!alexk_job_acquire_lock($job_id, 60)) {
+  if (!alexk_press_job_acquire_lock($job_id, 60)) {
     // Another pump is already active.
     return ['ok' => true, 'msg' => 'locked', 'job' => $job];
   }
@@ -105,7 +105,7 @@ function alexk_job_do_pump(string $job_id, int $batch_size = 10): array {
 
     // Nothing left? finish.
     if (count($queue) === 0) {
-      $job = alexk_job_finish($job_id, 'done');
+      $job = alexk_press_job_finish($job_id, 'done');
       return ['ok' => true, 'msg' => 'done', 'job' => $job];
     }
 
@@ -124,48 +124,48 @@ function alexk_job_do_pump(string $job_id, int $batch_size = 10): array {
 
       // IMPORTANT: this function is YOUR real builder.
       // Return true on success, string on failure.
-      $result = function_exists('alexk_build_one_derivative')
-        ? alexk_build_one_derivative($item)
-        : 'Missing function alexk_build_one_derivative($item)';
+      $result = function_exists('alexk_press_build_one_derivative')
+        ? alexk_press_build_one_derivative($item)
+        : 'Missing function alexk_press_build_one_derivative($item)';
 
       if ($result === true) {
-        alexk_job_tick_success($job_id, $current);
+        alexk_press_job_tick_success($job_id, $current);
       } else {
         $msg = is_string($result) ? $result : 'unknown error';
-        alexk_job_tick_error($job_id, $msg, $current);
+        alexk_press_job_tick_error($job_id, $msg, $current);
       }
 
       $processed++;
     }
 
     // Persist remaining queue + maybe finish
-    $job = alexk_job_patch($job_id, [
+    $job = alexk_press_job_patch($job_id, [
       'queue' => $queue,
     ]);
 
     $remaining = is_array($queue) ? count($queue) : 0;
     if ($remaining <= 0) {
-      $job = alexk_job_finish($job_id, 'done');
+      $job = alexk_press_job_finish($job_id, 'done');
       return ['ok' => true, 'msg' => 'done', 'job' => $job];
     }
 
     // Schedule next pump
-    alexk_job_schedule_next_pump($job_id);
+    alexk_press_job_schedule_next_pump($job_id);
 
     return ['ok' => true, 'msg' => 'pumped', 'processed' => $processed, 'remaining' => $remaining, 'job' => $job];
 
   } catch (Throwable $e) {
-    alexk_job_tick_error($job_id, 'Pump exception: ' . $e->getMessage(), ['step' => 'exception']);
-    $job = alexk_job_finish($job_id, 'error');
+    alexk_press_job_tick_error($job_id, 'Pump exception: ' . $e->getMessage(), ['step' => 'exception']);
+    $job = alexk_press_job_finish($job_id, 'error');
     return ['ok' => false, 'error' => $e->getMessage(), 'job' => $job];
   } finally {
-    alexk_job_release_lock($job_id);
+    alexk_press_job_release_lock($job_id);
   }
 }
 
 /** ---------- AJAX endpoint for the pump ---------- */
 
-add_action('wp_ajax_alexk_job_pump', function () {
+add_action('wp_ajax_alexk_press_job_pump', function () {
   if (!current_user_can('manage_options')) {
     wp_send_json_error(['msg' => 'forbidden'], 403);
   }
@@ -175,6 +175,6 @@ add_action('wp_ajax_alexk_job_pump', function () {
     wp_send_json_error(['msg' => 'missing job_id'], 400);
   }
 
-  $out = alexk_job_do_pump($job_id, 10);
+  $out = alexk_press_job_do_pump($job_id, 10);
   wp_send_json_success($out);
 });

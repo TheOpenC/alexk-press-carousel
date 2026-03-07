@@ -44,15 +44,16 @@ body.post-php.post-type-attachment .alexk-press-checkbox-details {
   background: #f6f7f7;
 }
 
-/* Grid view: green dot for included items */
+/* Grid view: magenta dot for included press items — top-right corner */
 .attachments .attachment .alexk-press-dot {
   position: absolute;
   top: 15px;
-  left: 15px;
+  right: 15px;
+  left: auto;
   width: 15px;
   height: 15px;
   border-radius: 999px;
-  background: #2fb344;
+  background: #e91e8c;
   box-shadow: 0 0 0 2px rgba(255,255,255,0.95);
   z-index: 5;
   pointer-events: none;
@@ -61,7 +62,7 @@ body.post-php.post-type-attachment .alexk-press-checkbox-details {
 
 .attachments .attachment.alexk-in-press .alexk-press-dot {
   display: block;
-  background: limegreen;
+  background: #e91e8c;
 }
 
 /* List view column */
@@ -75,7 +76,7 @@ body.post-php.post-type-attachment .alexk-press-checkbox-details {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #20d000;
+  background: #e91e8c;
   vertical-align: top;
   margin-top: 4px;
 }

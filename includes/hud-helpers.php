@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) exit;
  * Adapted from alexk-carousel — uses press-namespaced functions.
  */
 
-function alexk_build_queue_from_attachment_ids(array $attachment_ids): array {
+function alexk_press_build_queue_from_attachment_ids(array $attachment_ids): array {
   $queue = [];
 
   foreach ($attachment_ids as $attachment_id) {
@@ -92,7 +92,7 @@ function alexk_build_queue_from_attachment_ids(array $attachment_ids): array {
 /**
  * Execute ONE work item.
  */
-function alexk_build_one_derivative(array $item) {
+function alexk_press_build_one_derivative(array $item) {
   $type          = (string)($item['type'] ?? '');
   $attachment_id = (int)($item['attachment_id'] ?? 0);
   $src           = (string)($item['src'] ?? '');
