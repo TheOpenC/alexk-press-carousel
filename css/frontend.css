@@ -1,0 +1,130 @@
+/* =========================
+   PRESS CAROUSEL — FRONTEND
+   ========================= */
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body.logged-in {
+  overflow: hidden;
+}
+
+/* Page wrapper: full viewport, centered */
+.alexk-press-page {
+  height: 100svh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem;
+}
+
+body.admin-bar .alexk-press-page {
+  height: calc(100svh - var(--wp-admin--admin-bar--height, 32px));
+}
+
+/* Carousel box */
+.alexk-press-carousel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(1400px, 100%);
+  max-height: 100%;
+}
+
+/* Picture fills available space above the link bar */
+.alexk-press-picture {
+  display: block;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Image: crisp, contained, clickable */
+.alexk-press-carousel img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: calc(100svh - 4rem - 4rem - 3rem); /* viewport minus padding minus link bar */
+  object-fit: contain;
+  cursor: pointer;
+
+  /* Prioritise sharpness for text-heavy images */
+  image-rendering: -webkit-optimize-contrast; /* Safari */
+  image-rendering: crisp-edges;               /* Firefox */
+}
+
+body.admin-bar .alexk-press-carousel img {
+  max-height: calc(100svh - var(--wp-admin--admin-bar--height, 32px) - 4rem - 4rem - 3rem);
+}
+
+/* Link bar below the image */
+.alexk-press-link-bar {
+  flex: 0 0 auto;
+  width: 100%;
+  text-align: center;
+  padding: 0.75rem 0 0;
+}
+
+.alexk-press-link {
+  display: inline-block;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.9rem;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
+  cursor: pointer;
+}
+
+.alexk-press-link:hover {
+  opacity: 1;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .alexk-press-page {
+    padding: 0;
+    justify-content: flex-start;
+  }
+
+  .alexk-press-carousel {
+    width: 100%;
+    height: 100svh;
+  }
+
+  .alexk-press-picture {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .alexk-press-carousel img {
+    max-height: calc(100svh - 3rem);
+  }
+
+  .alexk-press-link-bar {
+    padding: 0.5rem 1rem;
+  }
+}
+
+/* Safari ghost-selection guard */
+@supports (-webkit-touch-callout: none) {
+  .alexk-press-carousel,
+  .alexk-press-carousel picture,
+  .alexk-press-carousel img {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    -webkit-touch-callout: none;
+  }
+  /* But keep the link selectable/clickable */
+  .alexk-press-link-bar,
+  .alexk-press-link {
+    -webkit-user-select: auto;
+    user-select: auto;
+  }
+}

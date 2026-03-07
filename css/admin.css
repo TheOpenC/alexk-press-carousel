@@ -1,0 +1,86 @@
+/* =========================
+   AlexK Press Carousel — Admin styles
+   ========================= */
+
+/* Sidebar checkbox + URL field */
+.media-modal .alexk-press-rightside-label {
+  font-weight: 600;
+  padding-top: 0.5rem;
+}
+
+body.post-php.post-type-attachment .alexk-press-rightside-label {
+  padding-top: 2rem;
+}
+
+.media-modal .alexk-press-rightside-label .press-checkbox {
+  position: relative;
+  top: -0.3rem;
+}
+
+.alexk-press-checkbox-details {
+  margin-top: 6px;
+  padding-top: 0.5rem;
+  font-size: 12px;
+  opacity: 0.8;
+  line-height: 1.3;
+}
+
+body.post-php.post-type-attachment .alexk-press-checkbox-details {
+  padding-top: 1rem;
+}
+
+/* Bulk buttons */
+#alexk-add-to-press,
+#alexk-remove-from-press {
+  margin-top: 10px;
+  margin-right: 10px;
+}
+
+#alexk-remove-from-press {
+  background: #fff;
+}
+
+#alexk-remove-from-press:hover {
+  background: #f6f7f7;
+}
+
+/* Grid view: green dot for included items */
+.attachments .attachment .alexk-press-dot {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: #2fb344;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.95);
+  z-index: 5;
+  pointer-events: none;
+  display: none;
+}
+
+.attachments .attachment.alexk-in-press .alexk-press-dot {
+  display: block;
+  background: limegreen;
+}
+
+/* List view column */
+.wp-list-table .column-alexk_press {
+  width: 80px;
+  text-align: center;
+}
+
+.alexk-press-dot {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #20d000;
+  vertical-align: top;
+  margin-top: 4px;
+}
+
+#alexk_press,
+#author {
+  text-align: center;
+}
