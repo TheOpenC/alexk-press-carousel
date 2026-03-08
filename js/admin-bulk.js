@@ -100,28 +100,40 @@
   }
 
   // ---------------------------
-  // Dot injection into grid tiles
+  // Dot indicator for grid tiles
   // ---------------------------
-  function injectDotIntoAttachment(attachmentEl) {
-    if (attachmentEl.querySelector('.alexk-press-dot')) return;
-    const dot = document.createElement('div');
-    dot.className = 'alexk-press-dot';
-    attachmentEl.appendChild(dot);
+  function applyPressDotToTile(tile, included) {
+    if (!tile) return;
+    if (included) {
+      tile.classList.add('alexk-in-press');
+      if (!tile.querySelector('.alexk-press-dot')) {
+        const dot = document.createElement('span');
+        dot.className = 'alexk-press-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        tile.appendChild(dot);
+      }
+    } else {
+      tile.classList.remove('alexk-in-press');
+      const dot = tile.querySelector('.alexk-press-dot');
+      if (dot) dot.remove();
+    }
   }
 
-  function syncDotsToModel() {
-    $$('.attachments .attachment').forEach(el => {
-      const model = el.__alexkPressModel ?? null;
-      const inPress = model ? !!model.get('alexk_in_press') : false;
-
-      injectDotIntoAttachment(el);
-
-      if (inPress) {
-        el.classList.add('alexk-in-press');
-      } else {
-        el.classList.remove('alexk-in-press');
-      }
-    });
+  function patchWpMediaAttachmentRender() {
+    const Attachment = window.wp?.media?.view?.Attachment;
+    if (!Attachment) return false;
+    const proto = Attachment.prototype;
+    if (proto.__alexkPressPatched) return true;
+    proto.__alexkPressPatched = true;
+    const originalRender = proto.render;
+    proto.render = function(...args) {
+      const out = originalRender.apply(this, args);
+      try {
+        applyPressDotToTile(this.el, !!this.model?.get?.('alexk_in_press'));
+      } catch {}
+      return out;
+    };
+    return true;
   }
 
   // ---------------------------
@@ -160,7 +172,7 @@
 
   function getSelectedIds() {
     return $$('.attachments .attachment.selected').map(el => {
-      return el.__alexkPressModel?.get('id') ?? parseInt(el.dataset.id, 10) ?? 0;
+      return parseInt(el.dataset.id, 10) || 0;
     }).filter(id => id > 0);
   }
 
@@ -173,13 +185,7 @@
 
     // Optimistic UI update
     $$('.attachments .attachment.selected').forEach(el => {
-      if (mode === 'add') {
-        el.classList.add('alexk-in-press');
-        el.__alexkPressModel?.set('alexk_in_press', true);
-      } else {
-        el.classList.remove('alexk-in-press');
-        el.__alexkPressModel?.set('alexk_in_press', false);
-      }
+      applyPressDotToTile(el, mode === 'add');
     });
 
     ajax(action, { nonce, ids: ids.join(',') }).then(res => {
@@ -272,36 +278,28 @@
   // Wire into wp.media events
   // ---------------------------
   function wireMediaLibrary() {
-    if (!window.wp?.media?.frame) return;
-
-    const frame = wp.media.frame;
-
-    // Sync models → dots whenever grid renders
-    frame.on('open activate', () => {
-      requestAnimationFrame(syncDotsToModel);
-    });
-
-    // Track model per tile as WP renders them
-    const origRender = wp.media.view.Attachment?.prototype?.render;
-    if (origRender) {
-      wp.media.view.Attachment.prototype.render = function(...args) {
-        const result = origRender.apply(this, args);
-        if (this.el && this.model) {
-          this.el.__alexkPressModel = this.model;
-          injectDotIntoAttachment(this.el);
-          if (this.model.get('alexk_in_press')) {
-            this.el.classList.add('alexk-in-press');
-          }
-        }
-        return result;
-      };
+    // Patch render — retry via MutationObserver if wp.media not ready yet
+    if (!patchWpMediaAttachmentRender()) {
+      const mo = new MutationObserver(() => {
+        try {
+          if (patchWpMediaAttachmentRender()) mo.disconnect();
+        } catch (e) {}
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
     }
 
+    // Also update a tile immediately when bulk add/remove changes its state
+    // (handled in postAjax callers via applyPressDotToTile)
+
     // Show/hide bulk buttons in bulk select mode
-    frame.on('content:activate', () => {
+    const syncBulkBar = () => {
+      if (!bulkToolbar) return;
       const isBulk = !!document.querySelector('.media-toolbar .bulk-select-button.active, .media-toolbar .bulk-select .active');
-      if (bulkToolbar) bulkToolbar.style.display = isBulk ? '' : 'none';
-    });
+      bulkToolbar.style.display = isBulk ? '' : 'none';
+    };
+    if (window.wp?.media?.frame) {
+      wp.media.frame.on('content:activate', syncBulkBar);
+    }
   }
 
   // ---------------------------
