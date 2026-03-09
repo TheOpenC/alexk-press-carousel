@@ -1,3 +1,7 @@
+// =============================================
+// ALEXK PRESS CAROUSEL
+// =============================================
+
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', onDomReady);
 } else {
@@ -20,11 +24,20 @@ function onDomReady() {
   const linkBar = carousel.querySelector('.alexk-press-link-bar');
   const linkEl  = carousel.querySelector('.alexk-press-link');
 
+  // Apply orientation to PHP-rendered first slide immediately
+  applyOrientationAttributes(carousel.querySelector('.alexk-press-slide'));
   updatePressLink(linkEl, slides[0].press_url);
 
-  const nextSlide = peekNextSlide(state);
-  if (nextSlide) preloadSlide(nextSlide);
+  // Exclude the PHP-rendered first slide from the deck so the first click
+  // always shows something new. If there's only 1 slide, keep full list.
+  const firstKey = JSON.stringify(slides[0].images.map(i => i.fallback));
+  const remaining = slides.filter(s => JSON.stringify(s.images.map(i => i.fallback)) !== firstKey);
+  state.allSlides = remaining.length > 0 ? remaining : slides.slice();
 
+  // Preloading disabled — preload <link> doesn't match what <picture> actually loads
+  // (srcset picks webp, preload hint was for jpg fallback → browser warning + wasted req)
+
+  // Click anywhere on carousel (except link bar) → advance
   carousel.addEventListener('click', function(event) {
     if (linkBar && linkBar.contains(event.target)) return;
     advanceSlide(carousel, state);
@@ -32,14 +45,17 @@ function onDomReady() {
 
   carousel._alexkPressCarousel = { state, linkEl };
   installKeyboardNavigation(carousel);
+
+  // Safari ghost-selection guard
+  applySafariSelectionGuard(carousel);
 }
+
+// ---- SLIDE NAVIGATION ----
 
 function advanceSlide(carousel, state) {
   const slide = getNextSlide(state);
   if (!slide) return;
   renderSlide(carousel, slide);
-  const next = peekNextSlide(state);
-  if (next) preloadSlide(next);
 }
 
 function renderSlide(carousel, slide) {
@@ -48,28 +64,63 @@ function renderSlide(carousel, slide) {
 
   slideEl.innerHTML = slide.images.map(img => `
     <picture class="alexk-press-picture">
-      ${img.webp_srcset ? `<source type="image/webp" srcset="${escAttr(img.webp_srcset)}" sizes="(max-width: 1400px) 100vw, 1400px">` : ''}
-      ${img.jpg_srcset  ? `<source type="image/jpeg" srcset="${escAttr(img.jpg_srcset)}" sizes="(max-width: 1400px) 100vw, 1400px">` : ''}
+      ${img.webp_srcset ? `<source type="image/webp" srcset="${escAttr(img.webp_srcset)}" sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px">` : ''}
+      ${img.jpg_srcset  ? `<source type="image/jpeg" srcset="${escAttr(img.jpg_srcset)}" sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px">` : ''}
       <img class="alexk-press-image"
            src="${escAttr(img.fallback)}"
            alt="${escAttr(img.alt || '')}"
-           sizes="(max-width: 1400px) 100vw, 1400px"
+           sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px"
            loading="eager"
            decoding="async">
     </picture>
   `).join('');
 
-  const linkEl = carousel.querySelector('.alexk-press-link');
-  updatePressLink(linkEl, slide.press_url);
+  applyOrientationAttributes(slideEl);
+  updatePressLink(carousel.querySelector('.alexk-press-link'), slide.press_url);
 }
 
-function escAttr(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+// ---- ORIENTATION ----
+
+function applyOrientationAttributes(slideEl) {
+  if (!slideEl) return;
+  slideEl.querySelectorAll('.alexk-press-image').forEach(img => {
+    const fallbackSrc = img.getAttribute('src'); // always the reliable JPEG fallback
+
+    const tryFallback = () => {
+      // Image loaded (complete=true) but is broken (0×0 decode) — CDN served bad bytes
+      if (img.currentSrc && img.currentSrc !== fallbackSrc) {
+        console.warn('[alexk-press] Broken image, falling back to JPEG:', img.currentSrc.split('/').pop());
+        const picture = img.closest('picture');
+        if (picture) picture.querySelectorAll('source').forEach(s => s.remove());
+        img.removeAttribute('srcset');
+        img.src = fallbackSrc;
+      }
+    };
+
+    const set = () => {
+      if (!img.naturalWidth || !img.naturalHeight) {
+        tryFallback();
+        return;
+      }
+      const picture = img.closest('.alexk-press-picture');
+      if (picture) picture.dataset.orientation = img.naturalWidth >= img.naturalHeight ? 'landscape' : 'portrait';
+    };
+
+    // onerror: network fail or completely invalid response
+    img.addEventListener('error', () => {
+      console.warn('[alexk-press] Image error, falling back:', img.currentSrc || img.src);
+      const picture = img.closest('picture');
+      if (picture) picture.querySelectorAll('source').forEach(s => s.remove());
+      img.removeAttribute('srcset');
+      img.src = fallbackSrc;
+    }, { once: true });
+
+    if (img.complete) set();
+    else img.addEventListener('load', set, { once: true });
+  });
 }
+
+// ---- DECK / STATE ----
 
 function getNextSlide(state) {
   ensureDeckReady(state);
@@ -99,27 +150,23 @@ function ensureDeckReady(state) {
   }
 }
 
+// ---- PRELOAD ----
+
 function preloadSlide(slide) {
   const existing = document.getElementById('alexk-press-preload-next');
   if (existing) existing.remove();
   const img = slide.images[0];
-  if (!img) return;
+  if (!img || !img.fallback) return;
+  // Preload the fallback JPG — universally supported, no srcset complexity
   const link = document.createElement('link');
   link.id   = 'alexk-press-preload-next';
   link.rel  = 'preload';
   link.as   = 'image';
   link.href = img.fallback;
-  if (img.webp_srcset) {
-    link.setAttribute('imagesrcset', img.webp_srcset);
-    link.setAttribute('imagesizes', '(max-width: 1400px) 100vw, 1400px');
-    link.type = 'image/webp';
-  } else if (img.jpg_srcset) {
-    link.setAttribute('imagesrcset', img.jpg_srcset);
-    link.setAttribute('imagesizes', '(max-width: 1400px) 100vw, 1400px');
-    link.type = 'image/jpeg';
-  }
   document.head.appendChild(link);
 }
+
+// ---- LINK BAR ----
 
 function updatePressLink(linkEl, press_url) {
   if (!linkEl) return;
@@ -133,23 +180,7 @@ function updatePressLink(linkEl, press_url) {
   }
 }
 
-function parseSlidesData(carousel) {
-  const raw = carousel.getAttribute('data-slides');
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function shuffleInPlace(array) {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-}
+// ---- KEYBOARD ----
 
 function installKeyboardNavigation(carouselEl) {
   if (document.__alexkPressKeyboardNavInstalled) return;
@@ -177,10 +208,9 @@ function isTypingContext(event) {
   return false;
 }
 
-// Safari ghost-selection guard
-(function () {
-  const carousel = document.querySelector('.alexk-press-carousel');
-  if (!carousel) return;
+// ---- SAFARI GUARD ----
+
+function applySafariSelectionGuard(carousel) {
   const ua = navigator.userAgent;
   const isSafari = /Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR|Android/.test(ua);
   if (!isSafari) return;
@@ -193,4 +223,32 @@ function isTypingContext(event) {
   carousel.addEventListener('selectstart', kill, { passive: false });
   carousel.addEventListener('mousedown',   kill, { passive: false });
   carousel.addEventListener('dragstart',   kill, { passive: false });
-})();
+}
+
+// ---- UTILITIES ----
+
+function parseSlidesData(carousel) {
+  const raw = carousel.getAttribute('data-slides');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function shuffleInPlace(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+}
+
+function escAttr(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}

@@ -705,7 +705,10 @@ function alexk_generate_press_derivatives_for_attachment(int $attachment_id): vo
     $out_jpg  = $out_dir . '/' . $stem . '-w' . $w . '.jpg';
 
     alexk_press_resize_and_write($file, $out_webp, $w, 'webp', $cancel_path, $out_dir);
+    // Remove zero-byte files — Imagick may write empty files on failure
+    if (file_exists($out_webp) && filesize($out_webp) === 0) @unlink($out_webp);
     alexk_press_resize_and_write($file, $out_jpg,  $w, 'jpg',  $cancel_path, $out_dir);
+    if (file_exists($out_jpg)  && filesize($out_jpg)  === 0) @unlink($out_jpg);
 
     $job = alexk_press_bulk_job_get();
     if (!empty($job['pending']) && !empty($job['started'])) {
@@ -899,23 +902,23 @@ add_shortcode('alexk_press', function($atts = []) {
     foreach (alexk_press_widths() as $w) {
       $p_webp = $out_dir . '/' . $stem . '-w' . $w . '.webp';
       $p_jpg  = $out_dir . '/' . $stem . '-w' . $w . '.jpg';
-      if (file_exists($p_webp)) $webp_srcset[] = alexk_press_path_to_upload_url($p_webp) . " {$w}w";
-      if (file_exists($p_jpg))  $jpg_srcset[]  = alexk_press_path_to_upload_url($p_jpg)  . " {$w}w";
+      // Skip zero-byte files — Imagick may have failed silently and written an empty file
+      if (file_exists($p_webp) && filesize($p_webp) > 0) $webp_srcset[] = alexk_press_path_to_upload_url($p_webp) . " {$w}w";
+      if (file_exists($p_jpg)  && filesize($p_jpg)  > 0) $jpg_srcset[]  = alexk_press_path_to_upload_url($p_jpg)  . " {$w}w";
     }
 
     if (empty($webp_srcset) && empty($jpg_srcset)) continue;
 
-    $widths_desc = alexk_press_widths();
-    rsort($widths_desc);
+    // Fallback src: cap at 1400px, skip zero-byte files
     $fallback = '';
-    foreach ($widths_desc as $w) {
+    foreach ([1400, 1024, 768, 480, 320] as $w) {
       $p = $out_dir . '/' . $stem . '-w' . $w . '.jpg';
-      if (file_exists($p)) { $fallback = alexk_press_path_to_upload_url($p); break; }
+      if (file_exists($p) && filesize($p) > 0) { $fallback = alexk_press_path_to_upload_url($p); break; }
     }
     if ($fallback === '') {
-      foreach ($widths_desc as $w) {
+      foreach ([1400, 1024, 768, 480, 320] as $w) {
         $p = $out_dir . '/' . $stem . '-w' . $w . '.webp';
-        if (file_exists($p)) { $fallback = alexk_press_path_to_upload_url($p); break; }
+        if (file_exists($p) && filesize($p) > 0) { $fallback = alexk_press_path_to_upload_url($p); break; }
       }
     }
 
@@ -1004,7 +1007,7 @@ add_shortcode('alexk_press', function($atts = []) {
              src="<?php echo $img['fallback']; ?>"
              alt="<?php echo $img['alt']; ?>"
              sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px"
-             loading="lazy"
+             loading="eager"
              decoding="async">
       </picture>
       <?php endforeach; ?>
