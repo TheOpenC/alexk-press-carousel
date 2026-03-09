@@ -24,7 +24,9 @@ require_once __DIR__ . '/includes/hud-ajax.php';
 
 function alexk_press_meta_key(): string        { return 'alexk_include_in_press'; }
 function alexk_press_url_meta_key(): string    { return 'alexk_press_url'; }
-function alexk_press_widths(): array           { return [320, 480, 768, 1024, 1400]; }
+function alexk_press_group_meta_key(): string  { return 'alexk_press_group'; }
+function alexk_press_order_meta_key(): string  { return 'alexk_press_group_order'; }
+function alexk_press_widths(): array           { return [320, 480, 768, 1024, 1400, 2800]; }
 
 /**
  * Keep WP's own thumbnails minimal.
@@ -96,37 +98,129 @@ function alexk_press_path_to_upload_url(string $abs_path): string {
  * ADMIN UI: Attachment fields (checkbox + press URL)
  * ======================================================= */
 
-add_filter('attachment_fields_to_edit', function($form_fields, $post) {
-  $meta_key = alexk_press_meta_key();
-  $url_key  = alexk_press_url_meta_key();
+// AJAX: return all existing group slugs with their shared metadata
+add_action('wp_ajax_alexk_press_get_groups', function() {
+  if (!current_user_can('upload_files')) wp_send_json_error([], 403);
+  global $wpdb;
 
-  $val     = get_post_meta($post->ID, $meta_key, true);
-  $checked = ($val === '1') ? 'checked' : '';
-  $url_val = esc_attr(get_post_meta($post->ID, $url_key, true));
+  $group_key = alexk_press_group_meta_key();
+  $url_key   = alexk_press_url_meta_key();
+
+  // Get all unique group slugs
+  $slugs = $wpdb->get_col($wpdb->prepare(
+    "SELECT DISTINCT meta_value FROM {$wpdb->postmeta}
+     WHERE meta_key = %s AND meta_value != '' ORDER BY meta_value ASC",
+    $group_key
+  ));
+
+  // For each group, find the first item with shared metadata to inherit
+  $groups = [];
+  foreach (($slugs ?: []) as $slug) {
+    $post_ids = $wpdb->get_col($wpdb->prepare(
+      "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s LIMIT 1",
+      $group_key, $slug
+    ));
+    $pid = $post_ids[0] ?? 0;
+    $groups[$slug] = [
+      'press_url'   => $pid ? (string)get_post_meta($pid, $url_key, true) : '',
+      'alt'         => $pid ? (string)get_post_meta($pid, '_wp_attachment_image_alt', true) : '',
+      'description' => $pid ? (string)get_post($pid)?->post_content : '',
+      'caption'     => $pid ? (string)get_post($pid)?->post_excerpt : '',
+    ];
+  }
+
+  wp_send_json_success($groups);
+});
+
+add_filter('attachment_fields_to_edit', function($form_fields, $post) {
+  $meta_key   = alexk_press_meta_key();
+  $url_key    = alexk_press_url_meta_key();
+  $group_key  = alexk_press_group_meta_key();
+  $order_key  = alexk_press_order_meta_key();
+
+  $in_press  = get_post_meta($post->ID, $meta_key, true) === '1';
+  $checked   = $in_press ? 'checked' : '';
+  $url_val   = esc_attr(get_post_meta($post->ID, $url_key, true));
+  $group_val = esc_attr(get_post_meta($post->ID, $group_key, true));
+  $order_val = esc_attr(get_post_meta($post->ID, $order_key, true));
+
+  $has_group     = $group_val !== '';
+  $fields_active = $in_press ? '' : 'disabled';
+  $group_active  = ($in_press && $has_group) ? '' : 'disabled';
 
   $form_fields[$meta_key] = [
     'label' => 'Include in press carousel',
     'input' => 'html',
-    'html'  => '<label class="alexk-press-rightside-label">
-                  <input type="checkbox" class="press-checkbox" name="attachments[' . $post->ID . '][' . $meta_key . ']" value="1" ' . $checked . ' />
-                  Include in press carousel
-                </label>
-                <div class="alexk-press-checkbox-details">
-                  When checked, this item is included in the press carousel and text-optimised responsive images are generated.
-                </div>',
+    'html'  => '
+      <label class="alexk-press-rightside-label">
+        <input type="checkbox" class="alexk-press-main-checkbox"
+               name="attachments[' . $post->ID . '][' . $meta_key . ']"
+               value="1" ' . $checked . ' />
+        Include in press carousel
+      </label>
+      <div class="alexk-press-checkbox-details">
+        When checked, this item is included in the press carousel and text-optimised responsive images are generated.
+      </div>',
   ];
 
   $form_fields[$url_key] = [
     'label' => 'Press article URL',
     'input' => 'html',
-    'html'  => '<input type="url"
-                  name="attachments[' . $post->ID . '][' . $url_key . ']"
-                  value="' . $url_val . '"
-                  placeholder="https://example.com/article"
-                  style="width:100%;" />
-                <div class="alexk-press-checkbox-details">
-                  Link shown below the press image. Opens in a new tab.
-                </div>',
+    'html'  => '
+      <input type="url"
+             class="alexk-press-conditional-field"
+             name="attachments[' . $post->ID . '][' . $url_key . ']"
+             value="' . $url_val . '"
+             placeholder="https://example.com/article"
+             ' . $fields_active . '
+             style="width:100%; color: ' . ($url_val ? '#000' : '#aaa') . ';" />
+      <div class="alexk-press-checkbox-details">
+        Link shown below the press image. Opens in a new tab.
+      </div>',
+  ];
+
+  $form_fields[$group_key] = [
+    'label' => 'Press group slug',
+    'input' => 'html',
+    'html'  => '
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" class="alexk-press-group-checkbox"
+               id="alexk-group-enable-' . $post->ID . '"
+               ' . ($has_group && $in_press ? 'checked' : '') . '
+               ' . ($in_press ? '' : 'disabled') . ' />
+        <label for="alexk-group-enable-' . $post->ID . '" style="margin:0;font-weight:normal;">
+          This is part of a document group
+        </label>
+      </div>
+      <input type="text"
+             class="alexk-press-group-slug-field alexk-press-conditional-field"
+             name="attachments[' . $post->ID . '][' . $group_key . ']"
+             value="' . $group_val . '"
+             placeholder="e.g. palliative-turn-2022"
+             list="alexk-press-groups-datalist-' . $post->ID . '"
+             ' . $group_active . '
+             style="width:100%;margin-top:6px;color:' . ($group_val ? '#000' : '#aaa') . ';" />
+      <datalist id="alexk-press-groups-datalist-' . $post->ID . '"></datalist>
+      <div class="alexk-press-checkbox-details">
+        Group slug links pages of the same document. Selecting an existing slug will inherit its URL, alt text, caption and description.
+      </div>',
+  ];
+
+  $form_fields[$order_key] = [
+    'label' => 'Press group order',
+    'input' => 'html',
+    'html'  => '
+      <input type="number"
+             class="alexk-press-conditional-field"
+             name="attachments[' . $post->ID . '][' . $order_key . ']"
+             value="' . $order_val . '"
+             placeholder="1"
+             min="1"
+             ' . $group_active . '
+             style="width:80px;color:' . ($order_val ? '#000' : '#aaa') . ';" />
+      <div class="alexk-press-checkbox-details">
+        Page order within the group (1 = first).
+      </div>',
   ];
 
   return $form_fields;
@@ -136,8 +230,10 @@ add_filter('attachment_fields_to_edit', function($form_fields, $post) {
  * Save checkbox + URL.
  */
 add_filter('attachment_fields_to_save', function($post, $attachment) {
-  $meta_key = alexk_press_meta_key();
-  $url_key  = alexk_press_url_meta_key();
+  $meta_key  = alexk_press_meta_key();
+  $url_key   = alexk_press_url_meta_key();
+  $group_key = alexk_press_group_meta_key();
+  $order_key = alexk_press_order_meta_key();
 
   // -- Checkbox --
   $new = (isset($attachment[$meta_key]) && $attachment[$meta_key] === '1') ? '1' : '0';
@@ -164,6 +260,18 @@ add_filter('attachment_fields_to_save', function($post, $attachment) {
   if (isset($attachment[$url_key])) {
     $url = esc_url_raw(trim($attachment[$url_key]));
     update_post_meta($post['ID'], $url_key, $url);
+  }
+
+  // -- Press group slug --
+  if (isset($attachment[$group_key])) {
+    $slug = sanitize_title(trim($attachment[$group_key]));
+    update_post_meta($post['ID'], $group_key, $slug);
+  }
+
+  // -- Press group order --
+  if (isset($attachment[$order_key])) {
+    $order = max(1, (int)$attachment[$order_key]);
+    update_post_meta($post['ID'], $order_key, $order);
   }
 
   return $post;
@@ -296,9 +404,8 @@ add_action('manage_media_custom_column', function (string $column_name, int $pos
 
 add_filter('wp_prepare_attachment_for_js', function($response, $attachment, $meta) {
   $id = (int)($attachment->ID ?? 0);
-  $response['alexk_in_press'] = $id
-    ? (get_post_meta($id, alexk_press_meta_key(), true) === '1')
-    : false;
+  $response['alexk_in_press']    = $id ? (get_post_meta($id, alexk_press_meta_key(), true) === '1') : false;
+  $response['alexk_press_group'] = $id ? (string)get_post_meta($id, alexk_press_group_meta_key(), true) : '';
   return $response;
 }, 10, 3);
 
@@ -350,8 +457,167 @@ add_action('admin_enqueue_scripts', function ($hook) {
 
   wp_add_inline_script('alexk-press-admin-bulk', 'window.ALEXK_PRESS_BULK = ' . wp_json_encode([
     'nonce'          => wp_create_nonce('alexk_press_bulk'),
+    'groups_nonce'   => wp_create_nonce('alexk_press_groups'),
     'included_count' => $included_count,
   ]) . ';', 'before');
+
+  // Legend bar above media grid
+  add_action('admin_footer', function() {
+    ?>
+    <script>
+    (function() {
+      // ---- Legend bar ----
+      function injectLegend() {
+        if (document.getElementById('alexk-dot-legend')) return;
+        const grid = document.querySelector('.attachments-browser, .media-frame-content');
+        if (!grid) return;
+        const legend = document.createElement('div');
+        legend.id = 'alexk-dot-legend';
+        legend.innerHTML =
+          '<span class="alexk-legend-dot alexk-legend-green"></span> Image carousel &nbsp;&nbsp;' +
+          '<span class="alexk-legend-dot alexk-legend-magenta"></span> Press carousel &nbsp;&nbsp;' +
+          '<span class="alexk-legend-dot alexk-legend-orange"></span> Press group (document)';
+        grid.insertBefore(legend, grid.firstChild);
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', injectLegend);
+      } else {
+        injectLegend();
+        setTimeout(injectLegend, 800);
+      }
+
+      // ---- Attachment details field interactivity ----
+      // Runs whenever the media modal renders new fields
+      let groupsCache = null;
+
+      function fetchGroups() {
+        if (groupsCache) return Promise.resolve(groupsCache);
+        const nonce = window.ALEXK_PRESS_BULK?.groups_nonce || '';
+        return fetch(`${window.ajaxurl}?action=alexk_press_get_groups&nonce=${nonce}`, {
+          credentials: 'same-origin'
+        }).then(r => r.json()).then(res => {
+          if (res.success) groupsCache = res.data || {};
+          return groupsCache || {};
+        }).catch(() => ({}));
+      }
+
+      function initPressFields(modal) {
+        const mainCb    = modal.querySelector('.alexk-press-main-checkbox');
+        const groupCb   = modal.querySelector('.alexk-press-group-checkbox');
+        const groupSlug = modal.querySelector('.alexk-press-group-slug-field');
+        const orderFld  = modal.querySelector('input[name*="alexk_press_group_order"]');
+        const urlFld    = modal.querySelector('input[name*="alexk_press_url"]');
+        const datalist  = modal.querySelector('datalist[id*="alexk-press-groups-datalist"]');
+
+        if (!mainCb) return;
+
+        function setFieldState() {
+          const inPress  = mainCb.checked;
+          const inGroup  = groupCb?.checked;
+
+          // URL field
+          if (urlFld) {
+            urlFld.disabled = !inPress;
+            urlFld.style.color = urlFld.value ? '#000' : '#aaa';
+          }
+
+          // Group checkbox
+          if (groupCb) {
+            groupCb.disabled = !inPress;
+            if (!inPress) groupCb.checked = false;
+          }
+
+          // Group slug field
+          if (groupSlug) {
+            groupSlug.disabled = !(inPress && inGroup);
+            groupSlug.style.color = groupSlug.value ? '#000' : '#aaa';
+            if (!inGroup) groupSlug.value = '';
+          }
+
+          // Order field
+          if (orderFld) {
+            orderFld.disabled = !(inPress && inGroup);
+            orderFld.style.color = orderFld.value ? '#000' : '#aaa';
+          }
+        }
+
+        // Populate datalist
+        if (datalist && !datalist.dataset.loaded) {
+          datalist.dataset.loaded = '1';
+          fetchGroups().then(groups => {
+            Object.keys(groups).forEach(slug => {
+              const opt = document.createElement('option');
+              opt.value = slug;
+              datalist.appendChild(opt);
+            });
+          });
+        }
+
+        // Inherit metadata when group slug is selected
+        if (groupSlug) {
+          groupSlug.addEventListener('change', function() {
+            const slug = this.value.trim();
+            if (!slug) return;
+            fetchGroups().then(groups => {
+              const data = groups[slug];
+              if (!data) return;
+
+              // Press URL
+              if (urlFld && data.press_url) urlFld.value = data.press_url;
+
+              // Alt text
+              const altFld = modal.closest('.media-modal, .attachment-info')
+                ?.querySelector('input[id*="attachment-details-alt-text"], textarea[id*="alt-text"], input[name*="_wp_attachment_image_alt"]');
+              if (altFld && data.alt) altFld.value = data.alt;
+
+              // Caption
+              const captionFld = modal.closest('.media-modal, .attachment-info')
+                ?.querySelector('textarea[id*="attachment-details-caption"], input[name*="post_excerpt"], textarea[name*="post_excerpt"]');
+              if (captionFld && data.caption) captionFld.value = data.caption;
+
+              // Description
+              const descFld = modal.closest('.media-modal, .attachment-info')
+                ?.querySelector('textarea[id*="attachment-details-description"], textarea[name*="post_content"]');
+              if (descFld && data.description) descFld.value = data.description;
+
+              // Update placeholder color
+              groupSlug.style.color = '#000';
+              if (urlFld) urlFld.style.color = urlFld.value ? '#000' : '#aaa';
+            });
+          });
+
+          // Update color as user types
+          groupSlug.addEventListener('input', function() {
+            this.style.color = this.value ? '#000' : '#aaa';
+          });
+        }
+
+        if (urlFld) {
+          urlFld.addEventListener('input', function() {
+            this.style.color = this.value ? '#000' : '#aaa';
+          });
+        }
+
+        mainCb.addEventListener('change', setFieldState);
+        if (groupCb) groupCb.addEventListener('change', setFieldState);
+
+        setFieldState();
+      }
+
+      // Watch for media modal content rendering
+      const observer = new MutationObserver(() => {
+        document.querySelectorAll('.media-modal .attachment-details, .attachment-details').forEach(modal => {
+          if (!modal.dataset.alexkPressInit) {
+            modal.dataset.alexkPressInit = '1';
+            initPressFields(modal);
+          }
+        });
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    })();
+    </script>
+    <?php
+  });
 });
 
 // Suppress jQuery Migrate noise on upload.php
@@ -504,6 +770,11 @@ function alexk_press_imagick_resize_and_write(string $src, string $dst, int $max
 
     // Lanczos for sharpest text downscale
     $im->resizeImage($new_w, $new_h, Imagick::FILTER_LANCZOS, 1, true);
+
+    // Unsharp mask to recover text crispness lost during downscale
+    // Parameters: radius, sigma, amount, threshold
+    $im->unsharpMaskImage(0, 0.5, 0.8, 0.05);
+
     @$im->stripImage();
 
     if (file_exists($cancel_path)) return false;
@@ -511,9 +782,11 @@ function alexk_press_imagick_resize_and_write(string $src, string $dst, int $max
 
     if ($format === 'webp') {
       $im->setImageFormat('webp');
-      // Lossless WebP: best quality for text/screenshots
+      // Lossless WebP — maximum quality for text
       $im->setImageCompressionQuality(100);
       @$im->setOption('webp:lossless', 'true');
+      @$im->setOption('webp:method', '6');      // slowest = best compression
+      @$im->setOption('webp:exact', 'true');    // preserve exact RGB values
     } else {
       $im->setImageFormat('jpeg');
       // Quality 95 + 4:4:4 chroma subsampling = sharpest JPEG text
@@ -605,7 +878,8 @@ add_shortcode('alexk_press', function($atts = []) {
 
   if (!$q->have_posts()) return '';
 
-  $items = [];
+  // Build flat list of all renderable items with group metadata
+  $raw = [];
   while ($q->have_posts()) {
     $q->the_post();
     $id = get_the_ID();
@@ -631,7 +905,6 @@ add_shortcode('alexk_press', function($atts = []) {
 
     if (empty($webp_srcset) && empty($jpg_srcset)) continue;
 
-    // Fallback: largest generated JPG, then WebP
     $widths_desc = alexk_press_widths();
     rsort($widths_desc);
     $fallback = '';
@@ -646,45 +919,106 @@ add_shortcode('alexk_press', function($atts = []) {
       }
     }
 
-    $press_url = esc_url(get_post_meta($id, alexk_press_url_meta_key(), true));
+    $group_slug  = (string)get_post_meta($id, alexk_press_group_meta_key(), true);
+    $group_order = (int)get_post_meta($id, alexk_press_order_meta_key(), true);
+    $press_url   = esc_url(get_post_meta($id, alexk_press_url_meta_key(), true));
 
-    $items[] = [
+    $raw[] = [
       'webp_srcset' => implode(', ', $webp_srcset),
       'jpg_srcset'  => implode(', ', $jpg_srcset),
       'fallback'    => esc_url($fallback),
       'alt'         => esc_attr(get_post_meta($id, '_wp_attachment_image_alt', true)),
       'press_url'   => $press_url,
+      'group_slug'  => $group_slug,
+      'group_order' => $group_order ?: 999,
     ];
   }
   wp_reset_postdata();
 
-  if (empty($items)) return '';
+  if (empty($raw)) return '';
+
+  // Group items: items with a group slug are collected together as one slide;
+  // items without a group slug are each their own slide.
+  $slides = [];
+  $groups = []; // slug => [images...]
+
+  foreach ($raw as $item) {
+    $slug = $item['group_slug'];
+    if ($slug !== '') {
+      $groups[$slug][] = $item;
+    } else {
+      // Solo item — becomes its own slide
+      $slides[] = [
+        'images'    => [$item],
+        'press_url' => $item['press_url'],
+        'grouped'   => false,
+      ];
+    }
+  }
+
+  // Sort each group by order, then add as single slide
+  foreach ($groups as $slug => $images) {
+    usort($images, fn($a, $b) => $a['group_order'] <=> $b['group_order']);
+    // Use press_url from first item in the group
+    $press_url = '';
+    foreach ($images as $img) {
+      if ($img['press_url']) { $press_url = $img['press_url']; break; }
+    }
+    $slides[] = [
+      'images'    => $images,
+      'press_url' => $press_url,
+      'grouped'   => true,
+    ];
+  }
+
+  if (empty($slides)) return '';
+
+  // Shuffle slides (Fisher-Yates equivalent via PHP)
+  shuffle($slides);
+
+  // Encode all slides for JS
+  $slides_json = wp_json_encode(array_map(function($slide) {
+    return [
+      'images'    => $slide['images'],
+      'press_url' => $slide['press_url'],
+      'grouped'   => $slide['grouped'],
+    ];
+  }, $slides));
+
+  $first = $slides[0];
 
   ob_start(); ?>
 <div class="alexk-press-page">
-  <div class="alexk-press-carousel" data-images="<?php echo esc_attr(wp_json_encode($items)); ?>">
-    <picture class="alexk-press-picture">
-      <?php if (!empty($items[0]['webp_srcset'])): ?>
-        <source type="image/webp" srcset="<?php echo esc_attr($items[0]['webp_srcset']); ?>" sizes="(max-width: 1400px) 100vw, 1400px">
-      <?php endif; ?>
-      <?php if (!empty($items[0]['jpg_srcset'])): ?>
-        <source type="image/jpeg" srcset="<?php echo esc_attr($items[0]['jpg_srcset']); ?>" sizes="(max-width: 1400px) 100vw, 1400px">
-      <?php endif; ?>
-      <img class="alexk-press-image"
-           src="<?php echo $items[0]['fallback']; ?>"
-           alt="<?php echo $items[0]['alt']; ?>"
-           sizes="(max-width: 1400px) 100vw, 1400px"
-           loading="lazy"
-           decoding="async">
-    </picture>
-    <?php if (!empty($items[0]['press_url'])): ?>
+  <div class="alexk-press-carousel" data-slides="<?php echo esc_attr($slides_json); ?>">
+
+    <div class="alexk-press-slide">
+      <?php foreach ($first['images'] as $img): ?>
+      <picture class="alexk-press-picture">
+        <?php if (!empty($img['webp_srcset'])): ?>
+          <source type="image/webp" srcset="<?php echo esc_attr($img['webp_srcset']); ?>" sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px">
+        <?php endif; ?>
+        <?php if (!empty($img['jpg_srcset'])): ?>
+          <source type="image/jpeg" srcset="<?php echo esc_attr($img['jpg_srcset']); ?>" sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px">
+        <?php endif; ?>
+        <img class="alexk-press-image"
+             src="<?php echo $img['fallback']; ?>"
+             alt="<?php echo $img['alt']; ?>"
+             sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px"
+             loading="lazy"
+             decoding="async">
+      </picture>
+      <?php endforeach; ?>
+    </div>
+
+    <?php if (!empty($first['press_url'])): ?>
     <div class="alexk-press-link-bar">
       <a class="alexk-press-link"
-         href="<?php echo $items[0]['press_url']; ?>"
+         href="<?php echo $first['press_url']; ?>"
          target="_blank"
          rel="noopener noreferrer">Read article →</a>
     </div>
     <?php endif; ?>
+
   </div>
 </div>
 <?php

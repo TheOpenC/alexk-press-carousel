@@ -65,6 +65,25 @@ body.post-php.post-type-attachment .alexk-press-checkbox-details {
   background: #e91e8c;
 }
 
+/* Grid view: orange dot for grouped press items — bottom-right corner */
+.attachments .attachment .alexk-press-group-dot {
+  position: absolute;
+  bottom: 15px;
+  right: 15px;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: #f97316;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.95);
+  z-index: 5;
+  pointer-events: none;
+  display: none;
+}
+
+.attachments .attachment.alexk-in-press-group .alexk-press-group-dot {
+  display: block;
+}
+
 /* List view column */
 .wp-list-table .column-alexk_press {
   width: 80px;
@@ -81,7 +100,46 @@ body.post-php.post-type-attachment .alexk-press-checkbox-details {
   margin-top: 4px;
 }
 
+/* Legend bar */
+#alexk-dot-legend {
+  padding: 8px 16px;
+  background: #f6f7f7;
+  border-bottom: 1px solid #dcdcde;
+  font-size: 12px;
+  color: #50575e;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: wrap;
+}
+
+.alexk-legend-dot {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+  box-shadow: 0 0 0 1.5px rgba(0,0,0,0.15);
+}
+
+/* Disabled/inactive press fields */
+.alexk-press-conditional-field:disabled {
+  background: #f6f7f7;
+  color: #aaa !important;
+  cursor: not-allowed;
+  border-color: #dcdcde;
+}
+
+.alexk-press-group-checkbox:disabled + label {
+  color: #aaa;
+  cursor: not-allowed;
+}
+
 #alexk_press,
 #author {
   text-align: center;
 }
+.alexk-legend-green   { background: limegreen; }
+.alexk-legend-magenta { background: #e91e8c; }
+.alexk-legend-orange  { background: #f97316; }

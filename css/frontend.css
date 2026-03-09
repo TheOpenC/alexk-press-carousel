@@ -4,25 +4,21 @@
 
 html, body {
   margin: 0;
-  height: 100%;
 }
 
-body.logged-in {
-  overflow: hidden;
-}
-
-/* Page wrapper: full viewport, centered */
+/* Page wrapper: centered column, breathing room top/bottom */
 .alexk-press-page {
-  height: 100svh;
+  min-height: 100svh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 4rem;
+  box-sizing: border-box;
 }
 
 body.admin-bar .alexk-press-page {
-  height: calc(100svh - var(--wp-admin--admin-bar--height, 32px));
+  min-height: calc(100svh - var(--wp-admin--admin-bar--height, 32px));
 }
 
 /* Carousel box */
@@ -31,42 +27,54 @@ body.admin-bar .alexk-press-page {
   flex-direction: column;
   align-items: center;
   width: min(1400px, 100%);
-  max-height: 100%;
+  cursor: pointer;
 }
 
-/* Picture fills available space above the link bar */
+/* Slide: stacked pictures for a grouped document */
+.alexk-press-slide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  gap: 2rem;
+}
+
+/* Each picture — constrained width so portrait pages don't stretch wall-to-wall */
 .alexk-press-picture {
   display: block;
+  /* Portrait pages (ratio < 1): max ~60% width so they look like a document */
+  /* Landscape pages (ratio >= 1): full width */
+  /* We handle this via JS-applied data attribute below */
   width: 100%;
-  flex: 1 1 auto;
-  min-height: 0;
 }
 
-/* Image: crisp, contained, clickable */
-.alexk-press-carousel img {
+.alexk-press-picture[data-orientation="portrait"] {
+  max-width: min(900px, 100%);
+}
+
+.alexk-press-picture[data-orientation="landscape"] {
+  max-width: 100%;
+}
+
+/* Image: full width of its picture container, natural height */
+.alexk-press-image {
   display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
   max-width: 100%;
-  max-height: calc(100svh - 4rem - 4rem - 3rem); /* viewport minus padding minus link bar */
-  object-fit: contain;
-  cursor: pointer;
 
-  /* Prioritise sharpness for text-heavy images */
-  image-rendering: -webkit-optimize-contrast; /* Safari */
-  image-rendering: crisp-edges;               /* Firefox */
+  /* Subtle paper shadow */
+  box-shadow: 0 2px 20px rgba(0, 0, 0, 0.10), 0 1px 5px rgba(0, 0, 0, 0.07);
+
+  /* Force browser to use highest quality resampling */
+  image-rendering: auto;
 }
 
-body.admin-bar .alexk-press-carousel img {
-  max-height: calc(100svh - var(--wp-admin--admin-bar--height, 32px) - 4rem - 4rem - 3rem);
-}
-
-/* Link bar below the image */
+/* Link bar below the slide */
 .alexk-press-link-bar {
-  flex: 0 0 auto;
   width: 100%;
   text-align: center;
-  padding: 0.75rem 0 0;
+  padding: 1.25rem 0 0;
 }
 
 .alexk-press-link {
@@ -88,26 +96,15 @@ body.admin-bar .alexk-press-carousel img {
 /* Mobile */
 @media (max-width: 768px) {
   .alexk-press-page {
-    padding: 0;
-    justify-content: flex-start;
+    padding: 1.5rem;
   }
 
-  .alexk-press-carousel {
-    width: 100%;
-    height: 100svh;
+  .alexk-press-slide {
+    gap: 1rem;
   }
 
-  .alexk-press-picture {
-    flex: 1 1 auto;
-    min-height: 0;
-  }
-
-  .alexk-press-carousel img {
-    max-height: calc(100svh - 3rem);
-  }
-
-  .alexk-press-link-bar {
-    padding: 0.5rem 1rem;
+  .alexk-press-picture[data-orientation="portrait"] {
+    max-width: 100%;
   }
 }
 
@@ -121,7 +118,6 @@ body.admin-bar .alexk-press-carousel img {
     -webkit-user-drag: none;
     -webkit-touch-callout: none;
   }
-  /* But keep the link selectable/clickable */
   .alexk-press-link-bar,
   .alexk-press-link {
     -webkit-user-select: auto;

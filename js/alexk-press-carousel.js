@@ -5,159 +5,136 @@ if (document.readyState === 'loading') {
 }
 
 function onDomReady() {
-  const carousel = findCarousel();
+  const carousel = document.querySelector('.alexk-press-carousel[data-slides]');
   if (!carousel) return;
 
-  const imgElement = findCarouselImage(carousel);
-  if (!imgElement) return;
+  const slides = parseSlidesData(carousel);
+  if (!slides.length) return;
+
+  const state = {
+    allSlides: slides.slice(),
+    deck: [],
+    lastShown: null,
+  };
 
   const linkBar = carousel.querySelector('.alexk-press-link-bar');
   const linkEl  = carousel.querySelector('.alexk-press-link');
 
-  const images = parseImagesData(carousel);
-  if (images.length === 0) return;
+  updatePressLink(linkEl, slides[0].press_url);
 
-  const state = createCarouselState(images);
+  const nextSlide = peekNextSlide(state);
+  if (nextSlide) preloadSlide(nextSlide);
 
-  // Show first image + set initial link
-  showNextAndPreload(carousel, imgElement, linkEl, state);
-
-  // Clicking the IMAGE or anywhere on the carousel advances to next
-  // Clicking the LINK does NOT advance (it opens the article)
   carousel.addEventListener('click', function(event) {
-    // If click landed on the link bar or the link itself, let it through — don't advance
     if (linkBar && linkBar.contains(event.target)) return;
-    onCarouselClick(event);
+    advanceSlide(carousel, state);
   });
 
-  carousel._alexkPressCarousel = { imgElement, linkEl, state };
-
+  carousel._alexkPressCarousel = { state, linkEl };
   installKeyboardNavigation(carousel);
 }
 
-function onCarouselClick(event) {
-  const carousel = event.currentTarget;
-  const store = carousel._alexkPressCarousel;
-  if (!store) return;
-  showNextAndPreload(carousel, store.imgElement, store.linkEl, store.state);
+function advanceSlide(carousel, state) {
+  const slide = getNextSlide(state);
+  if (!slide) return;
+  renderSlide(carousel, slide);
+  const next = peekNextSlide(state);
+  if (next) preloadSlide(next);
 }
 
-function installKeyboardNavigation(carouselEl) {
-  if (document.__alexkPressKeyboardNavInstalled) return;
-  document.__alexkPressKeyboardNavInstalled = true;
+function renderSlide(carousel, slide) {
+  const slideEl = carousel.querySelector('.alexk-press-slide');
+  if (!slideEl) return;
 
-  document.addEventListener('keydown', (event) => {
-    const store = carouselEl?._alexkPressCarousel;
-    if (!store) return;
-    if (isTypingContext(event)) return;
+  slideEl.innerHTML = slide.images.map(img => `
+    <picture class="alexk-press-picture">
+      ${img.webp_srcset ? `<source type="image/webp" srcset="${escAttr(img.webp_srcset)}" sizes="(max-width: 1400px) 100vw, 1400px">` : ''}
+      ${img.jpg_srcset  ? `<source type="image/jpeg" srcset="${escAttr(img.jpg_srcset)}" sizes="(max-width: 1400px) 100vw, 1400px">` : ''}
+      <img class="alexk-press-image"
+           src="${escAttr(img.fallback)}"
+           alt="${escAttr(img.alt || '')}"
+           sizes="(max-width: 1400px) 100vw, 1400px"
+           loading="eager"
+           decoding="async">
+    </picture>
+  `).join('');
 
-    const key = event.key;
-    if (key === 'ArrowRight' || key === ' ') {
-      if (key === ' ') event.preventDefault();
-      showNextAndPreload(carouselEl, store.imgElement, store.linkEl, store.state);
-    }
-    // Forward-only by design — no backwards nav
-  }, { passive: false });
+  const linkEl = carousel.querySelector('.alexk-press-link');
+  updatePressLink(linkEl, slide.press_url);
 }
 
-function isTypingContext(event) {
-  if (!event) return true;
-  if (event.altKey || event.ctrlKey || event.metaKey) return true;
-  const t = event.target;
-  if (!t || !(t instanceof Element)) return false;
-  if (t.matches('input, textarea, select, button, a')) return true;
-  if (t.isContentEditable) return true;
-  if (t.closest('[contenteditable="true"]')) return true;
-  return false;
+function escAttr(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
-function createCarouselState(images) {
-  return {
-    allImages: images.slice(),
-    deck: [],
-    lastShown: null,
-  };
-}
-
-function getNextImage(state) {
-  if (!state) return null;
+function getNextSlide(state) {
   ensureDeckReady(state);
   const next = state.deck.pop();
-  if (next && next.fallback) state.lastShown = next.fallback;
-  return next;
+  if (next) state.lastShown = JSON.stringify(next.images.map(i => i.fallback));
+  return next || null;
 }
 
-function showNextAndPreload(carouselEl, imgElement, linkEl, state) {
-  const current = getNextImage(state);
-  if (!current) return;
-
-  updateCarouselImage(imgElement, current);
-  updatePressLink(linkEl, current);
-
-  const next = peekNextImage(state);
-  if (next) preloadImage(carouselEl, next);
-}
-
-function peekNextImage(state) {
-  if (!state) return null;
+function peekNextSlide(state) {
   ensureDeckReady(state);
-  if (!state.deck || state.deck.length === 0) return null;
-  return state.deck[state.deck.length - 1];
+  return state.deck.length ? state.deck[state.deck.length - 1] : null;
 }
 
 function ensureDeckReady(state) {
   if (!state.deck || state.deck.length === 0) {
     let tries = 0;
     do {
-      state.deck = state.allImages.slice();
+      state.deck = state.allSlides.slice();
       shuffleInPlace(state.deck);
       tries++;
       if (tries > 10) break;
     } while (
       state.lastShown &&
       state.deck.length > 1 &&
-      state.deck[state.deck.length - 1].fallback === state.lastShown
+      JSON.stringify(state.deck[state.deck.length - 1].images.map(i => i.fallback)) === state.lastShown
     );
   }
 }
 
-function preloadImage(carouselEl, imageObj) {
+function preloadSlide(slide) {
   const existing = document.getElementById('alexk-press-preload-next');
   if (existing) existing.remove();
-
+  const img = slide.images[0];
+  if (!img) return;
   const link = document.createElement('link');
-  link.id  = 'alexk-press-preload-next';
-  link.rel = 'preload';
-  link.as  = 'image';
-  link.href = imageObj.fallback;
-
-  const sizes = imageObj.sizes ||
-    (carouselEl?.querySelector('img')?.sizes) ||
-    '100vw';
-
-  if (imageObj.webp_srcset) {
-    link.setAttribute('imagesrcset', imageObj.webp_srcset);
-    link.setAttribute('imagesizes', sizes);
+  link.id   = 'alexk-press-preload-next';
+  link.rel  = 'preload';
+  link.as   = 'image';
+  link.href = img.fallback;
+  if (img.webp_srcset) {
+    link.setAttribute('imagesrcset', img.webp_srcset);
+    link.setAttribute('imagesizes', '(max-width: 1400px) 100vw, 1400px');
     link.type = 'image/webp';
-  } else if (imageObj.jpg_srcset) {
-    link.setAttribute('imagesrcset', imageObj.jpg_srcset);
-    link.setAttribute('imagesizes', sizes);
+  } else if (img.jpg_srcset) {
+    link.setAttribute('imagesrcset', img.jpg_srcset);
+    link.setAttribute('imagesizes', '(max-width: 1400px) 100vw, 1400px');
     link.type = 'image/jpeg';
   }
-
   document.head.appendChild(link);
 }
 
-function findCarousel() {
-  return document.querySelector('.alexk-press-carousel[data-images]');
+function updatePressLink(linkEl, press_url) {
+  if (!linkEl) return;
+  const bar = linkEl.closest('.alexk-press-link-bar');
+  if (press_url) {
+    linkEl.href = press_url;
+    if (bar) bar.style.visibility = 'visible';
+  } else {
+    linkEl.href = '#';
+    if (bar) bar.style.visibility = 'hidden';
+  }
 }
 
-function findCarouselImage(carousel) {
-  return carousel.querySelector('img');
-}
-
-function parseImagesData(carousel) {
-  const raw = carousel.getAttribute('data-images');
+function parseSlidesData(carousel) {
+  const raw = carousel.getAttribute('data-slides');
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -174,68 +151,46 @@ function shuffleInPlace(array) {
   }
 }
 
-function updateCarouselImage(imgElement, imageObj) {
-  if (!imgElement || !imageObj) return;
-
-  const pictureEl = imgElement.closest('picture');
-  if (!pictureEl) return;
-
-  const webpSource = pictureEl.querySelector('source[type="image/webp"]');
-  const jpegSource = pictureEl.querySelector('source[type="image/jpeg"]');
-
-  if (webpSource && imageObj.webp_srcset) {
-    webpSource.srcset = imageObj.webp_srcset;
-    webpSource.sizes  = imageObj.sizes || '100vw';
-  }
-  if (jpegSource && imageObj.jpg_srcset) {
-    jpegSource.srcset = imageObj.jpg_srcset;
-    jpegSource.sizes  = imageObj.sizes || '100vw';
-  }
-
-  imgElement.src   = imageObj.fallback || imgElement.src;
-  imgElement.sizes = imageObj.sizes || '100vw';
-  if (typeof imageObj.alt === 'string') imgElement.alt = imageObj.alt;
+function installKeyboardNavigation(carouselEl) {
+  if (document.__alexkPressKeyboardNavInstalled) return;
+  document.__alexkPressKeyboardNavInstalled = true;
+  document.addEventListener('keydown', (event) => {
+    const store = carouselEl?._alexkPressCarousel;
+    if (!store) return;
+    if (isTypingContext(event)) return;
+    const key = event.key;
+    if (key === 'ArrowRight' || key === ' ') {
+      if (key === ' ') event.preventDefault();
+      advanceSlide(carouselEl, store.state);
+    }
+  }, { passive: false });
 }
 
-/**
- * Update the "Read article →" link below the image.
- * If the current item has no press_url, hide the bar entirely.
- */
-function updatePressLink(linkEl, imageObj) {
-  if (!linkEl) return;
-  const bar = linkEl.closest('.alexk-press-link-bar');
-
-  if (imageObj.press_url) {
-    linkEl.href = imageObj.press_url;
-    if (bar) bar.style.visibility = 'visible';
-  } else {
-    linkEl.href = '#';
-    if (bar) bar.style.visibility = 'hidden';
-  }
+function isTypingContext(event) {
+  if (!event) return true;
+  if (event.altKey || event.ctrlKey || event.metaKey) return true;
+  const t = event.target;
+  if (!t || !(t instanceof Element)) return false;
+  if (t.matches('input, textarea, select, button, a')) return true;
+  if (t.isContentEditable) return true;
+  if (t.closest('[contenteditable="true"]')) return true;
+  return false;
 }
 
-// Safari ghost-selection guard (press carousel only)
+// Safari ghost-selection guard
 (function () {
   const carousel = document.querySelector('.alexk-press-carousel');
   if (!carousel) return;
-
   const ua = navigator.userAgent;
   const isSafari = /Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR|Android/.test(ua);
   if (!isSafari) return;
-
-  const killSelection = (e) => {
+  const kill = (e) => {
     if (e.type === 'mousedown' && e.button !== 0) return;
-    // Don't kill clicks on the link bar
-    if (e.target && e.target.closest && e.target.closest('.alexk-press-link-bar')) return;
+    if (e.target?.closest?.('.alexk-press-link-bar')) return;
     e.preventDefault();
     try { window.getSelection()?.removeAllRanges(); } catch {}
   };
-
-  carousel.addEventListener('selectstart', killSelection, { passive: false });
-  carousel.addEventListener('mousedown',   killSelection, { passive: false });
-  carousel.addEventListener('dragstart',   killSelection, { passive: false });
-
-  carousel.querySelectorAll('img').forEach((img) => {
-    img.setAttribute('draggable', 'false');
-  });
+  carousel.addEventListener('selectstart', kill, { passive: false });
+  carousel.addEventListener('mousedown',   kill, { passive: false });
+  carousel.addEventListener('dragstart',   kill, { passive: false });
 })();

@@ -2,9 +2,9 @@
  * js/admin-bulk.js
  * AlexK Press Carousel — bulk UI for Media Library grid view.
  *
- * Green dot = included in press carousel.
- * Add/Remove buttons visible only in Bulk Select mode.
- * Polling drives the progress HUD via alexk_press_bulk_job_status.
+ * Magenta dot top-right  = in press carousel (single item)
+ * Magenta + orange dot   = in press carousel AND in a group
+ * Green dot top-left     = in image carousel (handled by carousel plugin)
  */
 
 (() => {
@@ -100,11 +100,40 @@
   }
 
   // ---------------------------
+  // Datalist: populate group slugs
+  // ---------------------------
+  function populateGroupsDatalist() {
+    const datalist = document.getElementById('alexk-press-groups-datalist');
+    if (!datalist || datalist.dataset.loaded) return;
+    datalist.dataset.loaded = '1';
+
+    fetch(`${window.ajaxurl}?action=alexk_press_get_groups&nonce=${window.ALEXK_PRESS_BULK?.groups_nonce || ''}`, {
+      credentials: 'same-origin',
+    }).then(r => r.json()).then(res => {
+      if (!res.success) return;
+      (res.data || []).forEach(slug => {
+        const opt = document.createElement('option');
+        opt.value = slug;
+        datalist.appendChild(opt);
+      });
+    }).catch(() => {});
+  }
+
+  // Populate datalist when media modal opens
+  document.addEventListener('click', (e) => {
+    if (e.target?.closest?.('.attachment')) {
+      setTimeout(populateGroupsDatalist, 400);
+    }
+  });
+
+  // ---------------------------
   // Dot indicator for grid tiles
   // ---------------------------
-  function applyPressDotToTile(tile, included) {
+  function applyPressDotToTile(tile, inPress, hasGroup) {
     if (!tile) return;
-    if (included) {
+
+    // Magenta dot (top-right) — present if in press
+    if (inPress) {
       tile.classList.add('alexk-in-press');
       if (!tile.querySelector('.alexk-press-dot')) {
         const dot = document.createElement('span');
@@ -115,6 +144,21 @@
     } else {
       tile.classList.remove('alexk-in-press');
       const dot = tile.querySelector('.alexk-press-dot');
+      if (dot) dot.remove();
+    }
+
+    // Orange dot (bottom-right) — present if in press AND has group
+    if (inPress && hasGroup) {
+      tile.classList.add('alexk-in-press-group');
+      if (!tile.querySelector('.alexk-press-group-dot')) {
+        const dot = document.createElement('span');
+        dot.className = 'alexk-press-group-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        tile.appendChild(dot);
+      }
+    } else {
+      tile.classList.remove('alexk-in-press-group');
+      const dot = tile.querySelector('.alexk-press-group-dot');
       if (dot) dot.remove();
     }
   }
@@ -129,7 +173,9 @@
     proto.render = function(...args) {
       const out = originalRender.apply(this, args);
       try {
-        applyPressDotToTile(this.el, !!this.model?.get?.('alexk_in_press'));
+        const inPress  = !!this.model?.get?.('alexk_in_press');
+        const hasGroup = !!(this.model?.get?.('alexk_press_group'));
+        applyPressDotToTile(this.el, inPress, hasGroup);
       } catch {}
       return out;
     };
@@ -155,14 +201,14 @@
     addBtn.type = 'button';
     addBtn.id = 'alexk-add-to-press';
     addBtn.className = 'button';
-    addBtn.textContent = 'Add to press';
+    addBtn.textContent = 'Add to press carousel';
     addBtn.addEventListener('click', () => handleBulkAction('add'));
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.id = 'alexk-remove-from-press';
     removeBtn.className = 'button';
-    removeBtn.textContent = 'Remove from press';
+    removeBtn.textContent = 'Remove from press carousel';
     removeBtn.addEventListener('click', () => handleBulkAction('remove'));
 
     bulkToolbar.appendChild(addBtn);
@@ -183,9 +229,9 @@
     const nonce = window.ALEXK_PRESS_BULK?.nonce ?? '';
     const action = mode === 'add' ? 'alexk_press_bulk_add' : 'alexk_press_bulk_remove';
 
-    // Optimistic UI update
+    // Optimistic UI update (no group info available in bulk, so just magenta)
     $$('.attachments .attachment.selected').forEach(el => {
-      applyPressDotToTile(el, mode === 'add');
+      applyPressDotToTile(el, mode === 'add', false);
     });
 
     ajax(action, { nonce, ids: ids.join(',') }).then(res => {
@@ -221,7 +267,6 @@
       const data = res.data;
       const pending = parseInt(data.pending, 10) || 0;
       const done    = parseInt(data.done, 10) || 0;
-      const total   = parseInt(data.total, 10) || 0;
 
       updateHud(data);
 
@@ -278,7 +323,6 @@
   // Wire into wp.media events
   // ---------------------------
   function wireMediaLibrary() {
-    // Patch render — retry via MutationObserver if wp.media not ready yet
     if (!patchWpMediaAttachmentRender()) {
       const mo = new MutationObserver(() => {
         try {
@@ -288,10 +332,6 @@
       mo.observe(document.documentElement, { childList: true, subtree: true });
     }
 
-    // Also update a tile immediately when bulk add/remove changes its state
-    // (handled in postAjax callers via applyPressDotToTile)
-
-    // Show/hide bulk buttons in bulk select mode
     const syncBulkBar = () => {
       if (!bulkToolbar) return;
       const isBulk = !!document.querySelector('.media-toolbar .bulk-select-button.active, .media-toolbar .bulk-select .active');
@@ -311,17 +351,11 @@
     ensureBulkButtons();
     wireMediaLibrary();
 
-    // Poll if a job is already running on page load
     getStatus().then(res => {
       if (res.success && (parseInt(res.data?.pending, 10) || 0) > 0) {
         startPolling();
       }
     });
-
-    // MutationObserver to catch tiles added after initial render
-    const observer = new MutationObserver(() => syncDotsToModel());
-    const attachmentsEl = document.querySelector('.attachments');
-    if (attachmentsEl) observer.observe(attachmentsEl, { childList: true, subtree: true });
   }
 
   if (document.readyState === 'loading') {
