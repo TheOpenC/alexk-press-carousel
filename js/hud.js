@@ -43,7 +43,7 @@
   }
 
   async function fetchStatus(jobId) {
-    const url = `${window.ajaxurl}?action=alexk_job_status&job_id=${encodeURIComponent(jobId)}`;
+    const url = `${window.ajaxurl}?action=alexk_press_job_status&job_id=${encodeURIComponent(jobId)}`;
     const res = await fetch(url, { credentials: 'same-origin' });
     return res.json();
   }

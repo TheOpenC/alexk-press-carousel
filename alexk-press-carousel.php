@@ -26,7 +26,7 @@ function alexk_press_meta_key(): string        { return 'alexk_include_in_press'
 function alexk_press_url_meta_key(): string    { return 'alexk_press_url'; }
 function alexk_press_group_meta_key(): string  { return 'alexk_press_group'; }
 function alexk_press_order_meta_key(): string  { return 'alexk_press_group_order'; }
-function alexk_press_widths(): array           { return [320, 480, 768, 1024, 1400, 2800]; }
+function alexk_press_widths(): array           { return [320, 480, 768, 950, 1024, 1400]; }
 
 /**
  * Keep WP's own thumbnails minimal.
@@ -910,15 +910,30 @@ add_shortcode('alexk_press', function($atts = []) {
     if (empty($webp_srcset) && empty($jpg_srcset)) continue;
 
     // Fallback src: cap at 1400px, skip zero-byte files
-    $fallback = '';
-    foreach ([1400, 1024, 768, 480, 320] as $w) {
+    // Also capture the local path so we can read dimensions cheaply (header only).
+    $fallback      = '';
+    $fallback_path = '';
+    foreach ([1400, 1024, 950, 768, 480, 320] as $w) {
       $p = $out_dir . '/' . $stem . '-w' . $w . '.jpg';
-      if (file_exists($p) && filesize($p) > 0) { $fallback = alexk_press_path_to_upload_url($p); break; }
+      if (file_exists($p) && filesize($p) > 0) { $fallback = alexk_press_path_to_upload_url($p); $fallback_path = $p; break; }
     }
     if ($fallback === '') {
-      foreach ([1400, 1024, 768, 480, 320] as $w) {
+      foreach ([1400, 1024, 950, 768, 480, 320] as $w) {
         $p = $out_dir . '/' . $stem . '-w' . $w . '.webp';
-        if (file_exists($p) && filesize($p) > 0) { $fallback = alexk_press_path_to_upload_url($p); break; }
+        if (file_exists($p) && filesize($p) > 0) { $fallback = alexk_press_path_to_upload_url($p); $fallback_path = $p; break; }
+      }
+    }
+
+    // Read pixel dimensions from the fallback file so JS can set data-orientation
+    // and aspect-ratio immediately — before any load event fires — eliminating the
+    // orientation snap and height-collapse flash on slide swaps.
+    $img_w = 0;
+    $img_h = 0;
+    if ($fallback_path) {
+      $dim = @getimagesize($fallback_path);
+      if ($dim && !empty($dim[0]) && !empty($dim[1])) {
+        $img_w = (int)$dim[0];
+        $img_h = (int)$dim[1];
       }
     }
 
@@ -934,6 +949,8 @@ add_shortcode('alexk_press', function($atts = []) {
       'press_url'   => $press_url,
       'group_slug'  => $group_slug,
       'group_order' => $group_order ?: 999,
+      'img_w'       => $img_w,
+      'img_h'       => $img_h,
     ];
   }
   wp_reset_postdata();
@@ -995,32 +1012,45 @@ add_shortcode('alexk_press', function($atts = []) {
   <div class="alexk-press-carousel" data-slides="<?php echo esc_attr($slides_json); ?>">
 
     <div class="alexk-press-slide">
-      <?php foreach ($first['images'] as $img): ?>
-      <picture class="alexk-press-picture">
+      <?php foreach ($first['images'] as $img):
+        $iw          = (int)($img['img_w'] ?? 0);
+        $ih          = (int)($img['img_h'] ?? 0);
+        $orientation = ($iw && $ih) ? ($iw >= $ih ? 'landscape' : 'portrait') : '';
+        $orient_attr = $orientation ? ' data-orientation="' . $orientation . '"' : '';
+        $native_cap  = $iw ? ' style="max-width:min(' . $iw . 'px,100%)"' : '';
+        $aspect_ratio= ($iw && $ih) ? 'aspect-ratio:' . $iw . '/' . $ih . ';' : '';
+        $max_src_w   = min($iw ?: 1400, 1400);
+        $sizes       = '(min-resolution: 2dppx) ' . $max_src_w . 'px, (max-width: 1400px) 100vw, 1400px';
+      ?>
+      <picture class="alexk-press-picture"<?php echo $orient_attr . $native_cap; ?>>
         <?php if (!empty($img['webp_srcset'])): ?>
-          <source type="image/webp" srcset="<?php echo esc_attr($img['webp_srcset']); ?>" sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px">
+          <source type="image/webp" srcset="<?php echo esc_attr($img['webp_srcset']); ?>" sizes="<?php echo esc_attr($sizes); ?>">
         <?php endif; ?>
         <?php if (!empty($img['jpg_srcset'])): ?>
-          <source type="image/jpeg" srcset="<?php echo esc_attr($img['jpg_srcset']); ?>" sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px">
+          <source type="image/jpeg" srcset="<?php echo esc_attr($img['jpg_srcset']); ?>" sizes="<?php echo esc_attr($sizes); ?>">
         <?php endif; ?>
         <img class="alexk-press-image"
              src="<?php echo $img['fallback']; ?>"
              alt="<?php echo $img['alt']; ?>"
-             sizes="(min-resolution: 2dppx) 2800px, (max-width: 1400px) 100vw, 1400px"
+             sizes="<?php echo esc_attr($sizes); ?>"
+             style="<?php echo esc_attr($aspect_ratio); ?>"
+             fetchpriority="high"
              loading="eager"
              decoding="async">
       </picture>
       <?php endforeach; ?>
     </div>
 
-    <?php if (!empty($first['press_url'])): ?>
-    <div class="alexk-press-link-bar">
+    <?php
+    $first_url = !empty($first['press_url']) ? $first['press_url'] : '#';
+    $bar_visibility = !empty($first['press_url']) ? 'visible' : 'hidden';
+    ?>
+    <div class="alexk-press-link-bar" style="visibility: <?php echo $bar_visibility; ?>">
       <a class="alexk-press-link"
-         href="<?php echo $first['press_url']; ?>"
+         href="<?php echo esc_url($first_url); ?>"
          target="_blank"
          rel="noopener noreferrer">Read article →</a>
     </div>
-    <?php endif; ?>
 
   </div>
 </div>
