@@ -155,6 +155,8 @@ add_filter('attachment_fields_to_edit', function($form_fields, $post) {
       <label class="alexk-press-rightside-label">
         <input type="checkbox" class="alexk-press-main-checkbox"
                name="attachments[' . $post->ID . '][' . $meta_key . ']"
+               data-attachment-id="' . $post->ID . '"
+               data-filename="' . esc_attr(basename(get_attached_file($post->ID) ?: '')) . '"
                value="1" ' . $checked . ' />
         Include in press carousel
       </label>
@@ -186,6 +188,7 @@ add_filter('attachment_fields_to_edit', function($form_fields, $post) {
       <div style="display:flex;align-items:center;gap:8px;">
         <input type="checkbox" class="alexk-press-group-checkbox"
                id="alexk-group-enable-' . $post->ID . '"
+               data-attachment-id="' . $post->ID . '"
                ' . ($has_group && $in_press ? 'checked' : '') . '
                ' . ($in_press ? '' : 'disabled') . ' />
         <label for="alexk-group-enable-' . $post->ID . '" style="margin:0;font-weight:normal;">
@@ -194,7 +197,7 @@ add_filter('attachment_fields_to_edit', function($form_fields, $post) {
       </div>
       <input type="text"
              class="alexk-press-group-slug-field alexk-press-conditional-field"
-             name="attachments[' . $post->ID . '][' . $group_key . ']"
+             data-attachment-id="' . $post->ID . '"
              value="' . $group_val . '"
              placeholder="e.g. palliative-turn-2022"
              list="alexk-press-groups-datalist-' . $post->ID . '"
@@ -211,8 +214,8 @@ add_filter('attachment_fields_to_edit', function($form_fields, $post) {
     'input' => 'html',
     'html'  => '
       <input type="number"
-             class="alexk-press-conditional-field"
-             name="attachments[' . $post->ID . '][' . $order_key . ']"
+             class="alexk-press-conditional-field alexk-press-order-field"
+             data-attachment-id="' . $post->ID . '"
              value="' . $order_val . '"
              placeholder="1"
              min="1"
@@ -250,9 +253,11 @@ add_filter('attachment_fields_to_save', function($post, $attachment) {
     if ($new === '1') {
       if ($cancel_path && file_exists($cancel_path)) @unlink($cancel_path);
       alexk_generate_press_derivatives_for_attachment($id);
+// localStorage updated client-side in JS
     } else {
       if ($cancel_path) @file_put_contents($cancel_path, (string)time());
       alexk_delete_press_derivatives_for_attachment($id);
+// localStorage updated client-side in JS
     }
   }
 
@@ -262,10 +267,15 @@ add_filter('attachment_fields_to_save', function($post, $attachment) {
     update_post_meta($post['ID'], $url_key, $url);
   }
 
-  // -- Press group slug --
+  // -- Press group slug (fallback — AJAX handles this in real-time) --
   if (isset($attachment[$group_key])) {
     $slug = sanitize_title(trim($attachment[$group_key]));
-    update_post_meta($post['ID'], $group_key, $slug);
+    if ($slug === '') {
+      delete_post_meta($post['ID'], $group_key);
+      delete_post_meta($post['ID'], $order_key);
+    } else {
+      update_post_meta($post['ID'], $group_key, $slug);
+    }
   }
 
   // -- Press group order --
@@ -474,7 +484,7 @@ add_action('admin_enqueue_scripts', function ($hook) {
         const legend = document.createElement('div');
         legend.id = 'alexk-dot-legend';
         legend.innerHTML =
-          '<span class="alexk-legend-dot alexk-legend-green"></span> Image carousel &nbsp;&nbsp;' +
+          '<span class="alexk-legend-dot alexk-legend-green"></span> Artwork carousel &nbsp;&nbsp;' +
           '<span class="alexk-legend-dot alexk-legend-magenta"></span> Press carousel &nbsp;&nbsp;' +
           '<span class="alexk-legend-dot alexk-legend-orange"></span> Press group (document)';
         grid.insertBefore(legend, grid.firstChild);
@@ -501,40 +511,86 @@ add_action('admin_enqueue_scripts', function ($hook) {
         }).catch(() => ({}));
       }
 
+      function ajaxGroupAction(action, attachmentId, extra) {
+        const nonce = window.ALEXK_PRESS_BULK?.nonce || '';
+        const body = new FormData();
+        body.set('action', action);
+        body.set('nonce', nonce);
+        body.set('attachment_id', String(attachmentId));
+        if (extra) Object.entries(extra).forEach(([k, v]) => body.set(k, String(v)));
+        return fetch(window.ajaxurl, { method: 'POST', credentials: 'same-origin', body })
+          .then(r => r.json()).catch(() => ({ success: false }));
+      }
+
+      function clearGroupFromTile(id) {
+        if (!id) return;
+        try {
+          const att = window.wp?.media?.attachment?.(id);
+          if (att && typeof att.set === 'function') {
+            att.set('alexk_press_group', '');
+            if (typeof att.trigger === 'function') att.trigger('change');
+          }
+        } catch(e) {}
+        try {
+          const tile = document.querySelector(`.attachments .attachment[data-id="${id}"]`);
+          if (tile) {
+            tile.classList.remove('alexk-in-press-group');
+            tile.querySelector('.alexk-press-group-dot')?.remove();
+          }
+        } catch(e) {}
+      }
+
+      function applyGroupToTile(id, slug) {
+        if (!id || !slug) return;
+        try {
+          const att = window.wp?.media?.attachment?.(id);
+          if (att && typeof att.set === 'function') {
+            att.set('alexk_press_group', slug);
+            if (typeof att.trigger === 'function') att.trigger('change');
+          }
+        } catch(e) {}
+        try {
+          const tile = document.querySelector(`.attachments .attachment[data-id="${id}"]`);
+          if (tile) {
+            tile.classList.add('alexk-in-press-group');
+            if (!tile.querySelector('.alexk-press-group-dot')) {
+              const dot = document.createElement('span');
+              dot.className = 'alexk-press-group-dot';
+              dot.setAttribute('aria-hidden', 'true');
+              tile.appendChild(dot);
+            }
+          }
+        } catch(e) {}
+      }
+
       function initPressFields(modal) {
         const mainCb    = modal.querySelector('.alexk-press-main-checkbox');
         const groupCb   = modal.querySelector('.alexk-press-group-checkbox');
         const groupSlug = modal.querySelector('.alexk-press-group-slug-field');
-        const orderFld  = modal.querySelector('input[name*="alexk_press_group_order"]');
+        const orderFld  = modal.querySelector('.alexk-press-order-field');
         const urlFld    = modal.querySelector('input[name*="alexk_press_url"]');
         const datalist  = modal.querySelector('datalist[id*="alexk-press-groups-datalist"]');
 
         if (!mainCb) return;
 
-        function setFieldState() {
-          const inPress  = mainCb.checked;
-          const inGroup  = groupCb?.checked;
+        const attachmentId = parseInt(groupCb?.dataset?.attachmentId || groupSlug?.dataset?.attachmentId || 0, 10);
 
-          // URL field
+        function setFieldState() {
+          const inPress = mainCb.checked;
+          const inGroup = groupCb?.checked;
+
           if (urlFld) {
             urlFld.disabled = !inPress;
             urlFld.style.color = urlFld.value ? '#000' : '#aaa';
           }
-
-          // Group checkbox
           if (groupCb) {
             groupCb.disabled = !inPress;
             if (!inPress) groupCb.checked = false;
           }
-
-          // Group slug field
           if (groupSlug) {
             groupSlug.disabled = !(inPress && inGroup);
             groupSlug.style.color = groupSlug.value ? '#000' : '#aaa';
-            if (!inGroup) groupSlug.value = '';
           }
-
-          // Order field
           if (orderFld) {
             orderFld.disabled = !(inPress && inGroup);
             orderFld.style.color = orderFld.value ? '#000' : '#aaa';
@@ -598,17 +654,84 @@ add_action('admin_enqueue_scripts', function ($hook) {
           });
         }
 
-        mainCb.addEventListener('change', setFieldState);
-        if (groupCb) groupCb.addEventListener('change', setFieldState);
+        // Group checkbox: instant toggle — AJAX fires immediately, no Save needed
+        if (groupCb) {
+          groupCb.addEventListener('change', function() {
+            setFieldState();
+            if (!this.checked && attachmentId) {
+              // Uncheck = immediately remove from group in DB
+              ajaxGroupAction('alexk_press_clear_group', attachmentId).then(() => {
+                // Bust cache so datalist reflects removal
+                groupsCache = null;
+                if (datalist) delete datalist.dataset.loaded;
+              });
+              clearGroupFromTile(attachmentId);
+              if (groupSlug) groupSlug.value = '';
+              if (orderFld) orderFld.value = '';
+            }
+            // Check = datalist will repopulate fresh on next focus
+          });
+        }
 
+        // Slug field: save to DB on blur or datalist selection
+        if (groupSlug) {
+          function saveGroupSlug() {
+            const slug = groupSlug.value.trim();
+            if (!slug || !attachmentId) return;
+            const order = parseInt(orderFld?.value || '1', 10) || 1;
+            ajaxGroupAction('alexk_press_set_group', attachmentId, { group_slug: slug, group_order: order })
+              .then(res => {
+                if (res.success) {
+                  applyGroupToTile(attachmentId, slug);
+                  // Bust cache so datalist picks up the new group next time
+                  groupsCache = null;
+                  if (datalist) delete datalist.dataset.loaded;
+                }
+              });
+          }
+          groupSlug.addEventListener('blur', saveGroupSlug);
+          groupSlug.addEventListener('change', saveGroupSlug);
+        }
+
+        // Order field: save on blur
+        if (orderFld) {
+          orderFld.addEventListener('blur', function() {
+            const slug = groupSlug?.value.trim();
+            if (!slug || !attachmentId) return;
+            const order = parseInt(this.value || '1', 10) || 1;
+            ajaxGroupAction('alexk_press_set_group', attachmentId, { group_slug: slug, group_order: order });
+          });
+        }
+
+        mainCb.addEventListener('change', function() {
+          setFieldState();
+          try {
+            const filename = mainCb.dataset.filename || '';
+            const mode = mainCb.checked ? 'add' : 'remove';
+            if (filename) {
+              localStorage.setItem('alexk_press_last_completed',
+                JSON.stringify({ filename, mode, ts: Date.now() })
+              );
+              const label = mode === 'add' ? 'Last added to press carousel:' : 'Last removed from press carousel:';
+              const noticeLabel = document.querySelector('.alexk-press-lastdone-label');
+              const noticeText  = document.querySelector('.alexk-press-lastdone-text');
+              const noticeSep   = document.querySelector('.alexk-press-sep');
+              if (noticeLabel) { noticeLabel.textContent = label + ' '; noticeLabel.style.display = ''; }
+              if (noticeText)  { noticeText.textContent  = filename;    noticeText.style.display  = ''; }
+              if (noticeSep)     noticeSep.style.display = '';
+            }
+          } catch(e) {}
+        });
         setFieldState();
       }
 
       // Watch for media modal content rendering
       const observer = new MutationObserver(() => {
         document.querySelectorAll('.media-modal .attachment-details, .attachment-details').forEach(modal => {
-          if (!modal.dataset.alexkPressInit) {
-            modal.dataset.alexkPressInit = '1';
+          const mainCbCheck = modal.querySelector('.alexk-press-main-checkbox');
+          const currentId = mainCbCheck?.dataset?.attachmentId || '';
+          if (modal.dataset.alexkPressInit !== currentId) {
+            modal.dataset.alexkPressInit = currentId;
             initPressFields(modal);
           }
         });
@@ -1084,6 +1207,51 @@ function alexk_press_bulk_job_clear(): void {
 /* =========================================================
  * BULK AJAX: add / remove / status
  * ======================================================= */
+
+
+/* =========================================================
+ * AJAX: set or clear group slug/order — instant, no Save needed
+ * ======================================================= */
+add_action('wp_ajax_alexk_press_set_group', function() {
+  if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'alexk_press_bulk')) {
+    wp_send_json_error(['message' => 'Invalid nonce'], 403);
+  }
+  if (!current_user_can('upload_files')) wp_send_json_error(['message' => 'Permission denied'], 403);
+
+  $id    = (int)($_POST['attachment_id'] ?? 0);
+  $slug  = sanitize_title(trim((string)($_POST['group_slug'] ?? '')));
+  $order = max(1, (int)($_POST['group_order'] ?? 1));
+
+  if ($id <= 0 || get_post_type($id) !== 'attachment') {
+    wp_send_json_error(['message' => 'Invalid attachment'], 400);
+  }
+
+  if ($slug !== '') {
+    update_post_meta($id, alexk_press_group_meta_key(), $slug);
+    update_post_meta($id, alexk_press_order_meta_key(), $order);
+    wp_send_json_success(['id' => $id, 'slug' => $slug, 'order' => $order]);
+  } else {
+    delete_post_meta($id, alexk_press_group_meta_key());
+    delete_post_meta($id, alexk_press_order_meta_key());
+    wp_send_json_success(['id' => $id, 'slug' => '', 'order' => 0]);
+  }
+});
+
+add_action('wp_ajax_alexk_press_clear_group', function() {
+  if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'alexk_press_bulk')) {
+    wp_send_json_error(['message' => 'Invalid nonce'], 403);
+  }
+  if (!current_user_can('upload_files')) wp_send_json_error(['message' => 'Permission denied'], 403);
+
+  $id = (int)($_POST['attachment_id'] ?? 0);
+  if ($id <= 0 || get_post_type($id) !== 'attachment') {
+    wp_send_json_error(['message' => 'Invalid attachment'], 400);
+  }
+
+  delete_post_meta($id, alexk_press_group_meta_key());
+  delete_post_meta($id, alexk_press_order_meta_key());
+  wp_send_json_success(['cleared' => $id]);
+});
 
 add_action('wp_ajax_alexk_press_bulk_add', function () {
   if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'alexk_press_bulk')) {

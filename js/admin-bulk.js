@@ -1,10 +1,16 @@
-/**
- * js/admin-bulk.js
- * AlexK Press Carousel — bulk UI for Media Library grid view.
+/* js/admin-bulk.js (RESET + AMEND)
+ * AlexK Carousel — minimal, readable bulk UI
  *
- * Magenta dot top-right  = in press carousel (single item)
- * Magenta + orange dot   = in press carousel AND in a group
- * Green dot top-left     = in image carousel (handled by carousel plugin)
+ * Keeps the "green dot = in press carousel" indicator and adds minimal bulk Add/Remove logic:
+ * - Green dot is visible in normal state AND bulk select state (only for included items)
+ * - Add/Remove buttons are ONLY visible in Bulk Select mode
+ * - Buttons only show when the action is actually possible for the current selection
+ * - Bulk actions update BOTH:
+ *     - server via AJAX (existing PHP handlers)
+ *     - client model so the checkbox UI reflects state immediately
+ * - After action, auto-exit Bulk Select (returns to normal library)
+ *
+ * Assumes PHP adds: response['alexk_in_press'] via wp_prepare_attachment_for_js (already in your plugin).
  */
 
 (() => {
@@ -12,355 +18,903 @@
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
   // ---------------------------
-  // Reload on exit single media view so dot updates
+  // Page refresh when exiting single media view so the dot updates.
   // ---------------------------
   function isInSingleMediaView() {
-    return !!document.querySelector('.media-modal .attachment-details');
+    // Attachment details view renders this panel inside the media modal
+    return !!document.querySelector(".media-modal .attachment-details");
   }
 
   function bindReloadOnExitSingleViewOnce() {
     if (document.__alexkPressReloadBound) return;
     document.__alexkPressReloadBound = true;
 
-    document.addEventListener('click', (e) => {
-      const el = e.target instanceof HTMLElement ? e.target : null;
-      if (!el) return;
-      if (el.closest('.media-modal-close') && isInSingleMediaView()) {
-        setTimeout(() => window.location.reload(), 50);
-      }
-    }, true);
+    // Click the X (close modal)
+    document.addEventListener(
+      "click",
+      (e) => {
+        const el = e.target instanceof HTMLElement ? e.target : null;
+        if (!el) return;
 
-    document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      if (isInSingleMediaView()) window.location.reload();
-    }, true);
+        const closeBtn = el.closest(".media-modal-close");
+        if (!closeBtn) return;
+
+        if (isInSingleMediaView()) {
+          // Let WP close the modal, then refresh to force grid state to reflect reality
+          setTimeout(() => window.location.reload(), 50);
+        }
+      },
+      true
+    );
+
+    // Escape key closes the modal too
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.key !== "Escape") return;
+        if (isInSingleMediaView()) {
+          window.location.reload();
+        }
+      },
+      true
+    );
   }
-
+    
+  
   // ---------------------------
-  // Persist notices across reload
+  // Persist notice across reload (sessionStorage)
   // ---------------------------
-  const NOTICE_KEY = 'alexk_press_notice_after_reload';
+  const ALEXK_NOTICE_KEY = "alexk_press_notice_after_reload";
 
-  function queueNotice(message, type = 'success') {
-    try { sessionStorage.setItem(NOTICE_KEY, JSON.stringify({ message, type })); } catch {}
-  }
-
-  function showQueuedNotice() {
+  function queueNoticeForAfterReload(message, type = "success") {
     try {
-      const raw = sessionStorage.getItem(NOTICE_KEY);
-      if (!raw) return;
-      sessionStorage.removeItem(NOTICE_KEY);
-      const parsed = JSON.parse(raw);
-      if (parsed?.message) showWpNotice(parsed.message, parsed.type || 'success');
+      sessionStorage.setItem(ALEXK_NOTICE_KEY, JSON.stringify({ message, type }));
     } catch {}
   }
 
-  function showWpNotice(message, type = 'success', ttlMs = 0) {
-    const wrap = document.querySelector('.wrap');
-    if (!wrap) return;
+  function showQueuedNoticeIfAny() {
+    try {
+      const raw = sessionStorage.getItem(ALEXK_NOTICE_KEY);
+      if (!raw) return;
+      sessionStorage.removeItem(ALEXK_NOTICE_KEY);
 
-    const existing = wrap.querySelector('.notice.alexk-press-notice');
-    if (existing) existing.remove();
+      const parsed = JSON.parse(raw);
+      if (parsed?.message) showWpNotice(parsed.message, parsed.type || "success");
+    } catch {}
+  }
 
-    const notice = document.createElement('div');
-    notice.className = `notice notice-${type} is-dismissible alexk-press-notice`;
 
-    const p = document.createElement('p');
-    p.textContent = message;
-    notice.appendChild(p);
+    // ---------------------------
+  // WP-style admin notice banner (like list view)
+  // ---------------------------
+ function showWpNotice(message, type = "success", ttlMs = 0) {
+  // type: "success" | "error" | "warning" | "info"
+  const wrap = document.querySelector(".wrap");
+  if (!wrap) return;
 
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'notice-dismiss';
-    btn.addEventListener('click', () => notice.remove());
-    notice.appendChild(btn);
+  // Remove existing AlexK notice if present
+  const existing = wrap.querySelector(".notice.alexk-press-notice");
+  if (existing) existing.remove();
 
+  const notice = document.createElement("div");
+  notice.className = `notice notice-${type} is-dismissible alexk-press-notice`;
+  notice.innerHTML = `<p>${message}</p>`;
+
+  // Insert right under the H1 / header area
+  const h1 = wrap.querySelector("h1");
+  if (h1 && h1.parentNode) {
+    h1.parentNode.insertBefore(notice, h1.nextSibling);
+  } else {
     wrap.insertBefore(notice, wrap.firstChild);
-
-    if (ttlMs > 0) setTimeout(() => notice.remove(), ttlMs);
   }
 
-  // ---------------------------
-  // AJAX helpers
-  // ---------------------------
-  function ajax(action, data) {
-    const body = new URLSearchParams({ action, ...data });
-    return fetch(window.ajaxurl, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    }).then(r => r.json());
+  // Dismiss button
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "notice-dismiss";
+  btn.innerHTML = `<span class="screen-reader-text">Dismiss this notice.</span>`;
+  btn.addEventListener("click", () => notice.remove());
+  notice.appendChild(btn);
+
+  // Optional auto-dismiss (used for “Queued…”)
+  if (Number.isFinite(ttlMs) && ttlMs > 0) {
+    window.setTimeout(() => {
+      if (notice && notice.isConnected) notice.remove();
+    }, ttlMs);
   }
+}
 
-  function getStatus() {
-    return fetch(`${window.ajaxurl}?action=alexk_press_bulk_job_status`, {
-      credentials: 'same-origin',
-    }).then(r => r.json());
+// Combined press status notice (last-added + count in one magenta banner)
+function ensurePressStatusNotice() {
+  const wrap = document.querySelector(".wrap");
+  if (!wrap) return null;
+  let el = wrap.querySelector(".alexk-press-status-notice");
+  if (el) return el;
+  el = document.createElement("div");
+  el.className = "notice is-dismissible alexk-press-status-notice";
+  el.style.cssText = "border-left-color:#c2185b;";
+  el.innerHTML = `<p>` +
+    `<strong class="alexk-press-lastdone-label" style="display:none"></strong>` +
+    `<span class="alexk-press-lastdone-text" style="display:none"></span>` +
+    `<span class="alexk-press-sep" style="display:none"><br></span>` +
+    `<strong>Total press items:</strong> <span class="alexk-press-count-text"></span>` +
+    `</p>`;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "notice-dismiss";
+  btn.innerHTML = `<span class="screen-reader-text">Dismiss this notice.</span>`;
+  btn.addEventListener("click", () => {
+    try { localStorage.removeItem(LAST_DONE_KEY); } catch {}
+    el.remove();
+  });
+  el.appendChild(btn);
+  const progress = wrap.querySelector(".notice.alexk-press-progress");
+  if (progress && progress.parentNode) progress.parentNode.insertBefore(el, progress);
+  else {
+    const h1 = wrap.querySelector("h1");
+    if (h1 && h1.parentNode) h1.parentNode.insertBefore(el, h1.nextSibling);
+    else wrap.insertBefore(el, wrap.firstChild);
   }
+  return el;
+}
 
-  // ---------------------------
-  // Datalist: populate group slugs
-  // ---------------------------
-  function populateGroupsDatalist() {
-    const datalist = document.getElementById('alexk-press-groups-datalist');
-    if (!datalist || datalist.dataset.loaded) return;
-    datalist.dataset.loaded = '1';
+function showPressIncludedCountNotice() {
+  const n = Number(window?.ALEXK_PRESS_BULK?.included_count ?? NaN);
+  if (!Number.isFinite(n)) return;
+  const el = ensurePressStatusNotice();
+  if (!el) return;
+  const countEl = el.querySelector(".alexk-press-count-text");
+  if (countEl) countEl.textContent = `${n} ${n === 1 ? "item" : "items"}`;
+}
 
-    fetch(`${window.ajaxurl}?action=alexk_press_get_groups&nonce=${window.ALEXK_PRESS_BULK?.groups_nonce || ''}`, {
-      credentials: 'same-origin',
-    }).then(r => r.json()).then(res => {
-      if (!res.success) return;
-      (res.data || []).forEach(slug => {
-        const opt = document.createElement('option');
-        opt.value = slug;
-        datalist.appendChild(opt);
-      });
-    }).catch(() => {});
-  }
 
-  // Populate datalist when media modal opens
-  document.addEventListener('click', (e) => {
-    if (e.target?.closest?.('.attachment')) {
-      setTimeout(populateGroupsDatalist, 400);
-    }
+  // UI progress element
+  function ensureProgressNoticeEl() {
+  const wrap = document.querySelector(".wrap");
+  if (!wrap) return null;
+
+  let el = wrap.querySelector(".notice.alexk-press-progress");
+  if (el) return el;
+
+  el = document.createElement("div");
+  el.className = "notice notice-info alexk-press-progress";
+  el.innerHTML = `<p><strong>Press carousel job:</strong> <span class="alexk-progress-text">Starting…</span></p>`;
+
+  const h1 = wrap.querySelector("h1");
+  if (h1 && h1.parentNode) h1.parentNode.insertBefore(el, h1.nextSibling);
+  else wrap.insertBefore(el, wrap.firstChild);
+
+  return el;
+}
+
+function ensureCornerHudEl() {
+  let el = document.querySelector("#alexk-press-corner-hud");
+  if (el) return el;
+
+  el = document.createElement("div");
+  el.id = "alexk-corner-hud";
+  el.style.position = "fixed";
+  el.style.right = "16px";
+  el.style.bottom = "16px";
+  el.style.zIndex = "999999";
+  el.style.background = "#fff";
+  el.style.border = "1px solid rgba(0,0,0,0.15)";
+  el.style.borderRadius = "8px";
+  el.style.boxShadow = "0 8px 24px rgba(0,0,0,0.12)";
+  el.style.padding = "10px 12px";
+  el.style.fontSize = "13px";
+  el.style.lineHeight = "1.3";
+  el.style.maxWidth = "360px";
+  el.style.display = "none";
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <div style="flex:1;">
+        <div style="font-weight:600;margin-bottom:2px;">Press carousel job</div>
+        <div class="alexk-press-hud-text">Starting…</div>
+      </div>
+      <button type="button" class="alexk-press-hud-x" aria-label="Dismiss" style="border:0;background:transparent;cursor:pointer;font-size:16px;line-height:1;">×</button>
+    </div>
+  `;
+
+  el.querySelector(".alexk-press-hud-x")?.addEventListener("click", () => {
+    el.style.display = "none";
   });
 
-  // ---------------------------
-  // Dot indicator for grid tiles
-  // ---------------------------
-  function applyPressDotToTile(tile, inPress, hasGroup) {
-    if (!tile) return;
+  document.body.appendChild(el);
+  return el;
+}
 
-    // Magenta dot (top-right) — present if in press
-    if (inPress) {
-      tile.classList.add('alexk-in-press');
-      if (!tile.querySelector('.alexk-press-dot')) {
-        const dot = document.createElement('span');
-        dot.className = 'alexk-press-dot';
-        dot.setAttribute('aria-hidden', 'true');
-        tile.appendChild(dot);
-      }
+function renderBulkProgress(data) {
+  // ✅ Corner HUD ONLY (no top bar progress)
+  const mode = (data?.mode || "").toString();
+  const done = Number(data?.done ?? 0);
+  const total = Number(data?.total ?? 0);
+  const pending = Number(data?.pending ?? 0);
+
+  // If a prior top progress notice exists from older code, remove it once.
+  const oldTop = document.querySelector(".notice.alexk-press-progress");
+  if (oldTop) oldTop.remove();
+
+  const hud = ensureCornerHudEl();
+
+  // Hide when no active job
+  const noJob = (!Number.isFinite(total) || total <= 0 || (!pending && !done));
+  if (noJob) {
+    if (hud) hud.style.display = "none";
+    return;
+  }
+
+  const file = (data?.current_filename || "").toString();
+  const fileDone = Number(data?.file_done ?? 0);
+  const filePending = Number(data?.file_pending ?? 0);
+
+  const modeLabel = mode === "remove" ? "Removing" : (mode === "add" ? "Adding" : "Working");
+
+  const filePart =
+    file && Number.isFinite(filePending) && filePending > 0
+      ? ` — ${fileDone}/${filePending} sizes: ${file}`
+      : file
+        ? ` — ${file}`
+        : "";
+
+  const text = `${modeLabel}: ${done}/${total} done (${pending} left)${filePart}`;
+
+  const hudText = hud.querySelector(".alexk-press-hud-text");
+  if (hudText) hudText.textContent = text;
+  hud.style.display = "";
+}
+
+
+  // ---------------------------
+  // Bulk mode detection (your WP 6.9 toolbar)
+  // ---------------------------
+    function isBulkModeActive() {
+    const toggle = $("button.select-mode-toggle-button");
+    if (!toggle) return false;
+
+    const txt = ((toggle.textContent || "") + "").trim().toLowerCase();
+
+    // WP changes this label across versions ("Cancel", "Cancel selection", etc.)
+    // Also: selecting mode usually sets aria-pressed="true" or body.selecting.
+    const ariaPressed = (toggle.getAttribute("aria-pressed") || "").toLowerCase();
+    const bodySelecting = document.body && document.body.classList.contains("selecting");
+
+    return bodySelecting || ariaPressed === "true" || txt.includes("cancel");
+  }
+
+  function exitBulkSelectMode() {
+    const toggle = $("button.select-mode-toggle-button");
+    if (!toggle) return;
+
+    // Only click if we are in bulk/selecting mode
+    if (isBulkModeActive()) toggle.click();
+  }
+
+  
+  // ---------------------------
+  // Green dot indicator
+  // ---------------------------
+  function ensureDotEl(tile) {
+    if (!tile) return null;
+    let dot = tile.querySelector(".alexk-press-dot");
+    if (dot) return dot;
+    dot = document.createElement("span");
+    dot.className = "alexk-press-dot";
+    dot.setAttribute("aria-hidden", "true");
+    tile.appendChild(dot);
+    return dot;
+  }
+
+  function applyIncludedStateToTile(tile, included) {
+    if (!tile) return;
+    if (included) {
+      tile.classList.add("alexk-in-press");
+      ensureDotEl(tile);
     } else {
-      tile.classList.remove('alexk-in-press');
-      const dot = tile.querySelector('.alexk-press-dot');
+      tile.classList.remove("alexk-in-press");
+      const dot = tile.querySelector(".alexk-press-dot");
       if (dot) dot.remove();
     }
 
-    // Orange dot (bottom-right) — present if in press AND has group
-    if (inPress && hasGroup) {
-      tile.classList.add('alexk-in-press-group');
-      if (!tile.querySelector('.alexk-press-group-dot')) {
-        const dot = document.createElement('span');
-        dot.className = 'alexk-press-group-dot';
-        dot.setAttribute('aria-hidden', 'true');
-        tile.appendChild(dot);
+    // Orange group dot — present if in press AND has a group
+    const hasGroup = !!(window.wp?.media?.attachment?.(
+      parseInt(tile.getAttribute("data-id"), 10)
+    )?.get?.("alexk_press_group"));
+
+    if (included && hasGroup) {
+      tile.classList.add("alexk-in-press-group");
+      if (!tile.querySelector(".alexk-press-group-dot")) {
+        const gdot = document.createElement("span");
+        gdot.className = "alexk-press-group-dot";
+        gdot.setAttribute("aria-hidden", "true");
+        tile.appendChild(gdot);
       }
     } else {
-      tile.classList.remove('alexk-in-press-group');
-      const dot = tile.querySelector('.alexk-press-group-dot');
-      if (dot) dot.remove();
+      tile.classList.remove("alexk-in-press-group");
+      tile.querySelector(".alexk-press-group-dot")?.remove();
     }
   }
+
+  // ---------------------------
+// Hover metadata (Grid View): show file details on hover
+// ---------------------------
+function buildHoverTextFromModel(model) {
+  try {
+    const get = (k) => (model && typeof model.get === "function" ? model.get(k) : undefined);
+
+    const id = get("id");
+    const filename = get("filename") || get("name") || get("title") || "";
+    const subtype = get("subtype") || get("type") || "";
+    const mime = get("mime") || get("mime_type") || "";
+    const size = get("filesizeHumanReadable") || get("filesize") || "";
+    const width = get("width");
+    const height = get("height");
+    const dims = (Number(width) > 0 && Number(height) > 0) ? `${width}×${height}` : "";
+
+    const inCarousel = !!get("alexk_in_press");
+    const carouselText = inCarousel ? "In press carousel: Yes" : "In press carousel: No";
+
+    // Keep this short and readable in native tooltip
+    const parts = [
+      filename ? `File: ${filename}` : "",
+      dims ? `Size: ${dims}` : "",
+      size ? `Filesize: ${size}` : "",
+      subtype ? `Type: ${subtype}` : (mime ? `Type: ${mime}` : ""),
+      (Number(id) > 0) ? `ID: ${id}` : "",
+      carouselText,
+    ].filter(Boolean);
+
+    return parts.join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function applyHoverMetaToTile(tile, model) {
+  if (!tile) return;
+  const text = buildHoverTextFromModel(model);
+  if (!text) return;
+  // Native browser tooltip on hover
+  tile.setAttribute("title", text);
+}
 
   function patchWpMediaAttachmentRender() {
     const Attachment = window.wp?.media?.view?.Attachment;
     if (!Attachment) return false;
+
     const proto = Attachment.prototype;
     if (proto.__alexkPressPatched) return true;
     proto.__alexkPressPatched = true;
+
     const originalRender = proto.render;
-    proto.render = function(...args) {
+    proto.render = function (...args) {
       const out = originalRender.apply(this, args);
       try {
-        const inPress  = !!this.model?.get?.('alexk_in_press');
-        const hasGroup = !!(this.model?.get?.('alexk_press_group'));
-        applyPressDotToTile(this.el, inPress, hasGroup);
+        const included = !!this.model?.get?.("alexk_in_press");
+        applyIncludedStateToTile(this.el, included);
+        applyHoverMetaToTile(this.el, this.model);
+
       } catch {}
       return out;
     };
+
     return true;
   }
 
+  
+
   // ---------------------------
-  // Bulk buttons
+  // Selection helpers
   // ---------------------------
-  let bulkToolbar = null;
-
-  function ensureBulkButtons() {
-    if (bulkToolbar) return;
-
-    const toolbar = document.querySelector('.media-toolbar-secondary');
-    if (!toolbar) return;
-
-    bulkToolbar = document.createElement('span');
-    bulkToolbar.className = 'alexk-press-bulk-buttons';
-    bulkToolbar.style.display = 'none';
-
-    const addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.id = 'alexk-add-to-press';
-    addBtn.className = 'button';
-    addBtn.textContent = 'Add to press carousel';
-    addBtn.addEventListener('click', () => handleBulkAction('add'));
-
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.id = 'alexk-remove-from-press';
-    removeBtn.className = 'button';
-    removeBtn.textContent = 'Remove from press carousel';
-    removeBtn.addEventListener('click', () => handleBulkAction('remove'));
-
-    bulkToolbar.appendChild(addBtn);
-    bulkToolbar.appendChild(removeBtn);
-    toolbar.appendChild(bulkToolbar);
+  function selectedTiles() {
+    return $$(".attachments .attachment.selected");
   }
 
-  function getSelectedIds() {
-    return $$('.attachments .attachment.selected').map(el => {
-      return parseInt(el.dataset.id, 10) || 0;
-    }).filter(id => id > 0);
+  function partitionSelection() {
+    const inCarousel = [];
+    const notInCarousel = [];
+    for (const el of selectedTiles()) {
+      const id = parseInt(el.getAttribute("data-id"), 10);
+      if (!Number.isFinite(id)) continue;
+      (el.classList.contains("alexk-in-press") ? inCarousel : notInCarousel).push(id);
+    }
+    return { inCarousel, notInCarousel };
   }
 
-  function handleBulkAction(mode) {
-    const ids = getSelectedIds();
-    if (!ids.length) return;
-
-    const nonce = window.ALEXK_PRESS_BULK?.nonce ?? '';
-    const action = mode === 'add' ? 'alexk_press_bulk_add' : 'alexk_press_bulk_remove';
-
-    // Optimistic UI update (no group info available in bulk, so just magenta)
-    $$('.attachments .attachment.selected').forEach(el => {
-      applyPressDotToTile(el, mode === 'add', false);
+  // ---------------------------
+  // AJAX + model sync 
+  // ---------------------------
+  async function postAjax(action, ids) {
+    const body = new URLSearchParams();
+    body.set("action", action);
+    body.set("nonce", window.ALEXK_PRESS_BULK?.nonce || "");
+    body.set("ids", (ids || []).join(","));
+    
+    
+    const ajaxUrl = window.ajaxurl || "/wp-admin/admin-ajax.php";
+    const res = await fetch(ajaxUrl, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: body.toString(),
     });
+    return res.json();
+  }
 
-    ajax(action, { nonce, ids: ids.join(',') }).then(res => {
-      if (!res.success) {
-        showWpNotice('Press carousel: action failed. Please try again.', 'error');
+  
+
+
+
+  // NEW CODE
+    // ---------------------------
+  // Elementor-safe progress pump:
+  // If PHP advances one item per "status" call, we must poll status to keep work moving.
+  // ---------------------------
+
+  function startBulkProgressPump() {
+  // Don't start twice
+  if (document.__alexkPressPump) return;
+  document.__alexkPressPump = true;
+
+   const LAST_DONE_KEY = "alexk_press_last_completed";
+
+  function modeLabel(mode) {
+  const m = (mode || "").toString().toLowerCase();
+
+  // Robust: supports "remove", "remove_from_carousel", "removing", etc.
+  const isRemove = m.includes("remove") || m.includes("delete");
+
+  return isRemove ? "Last removed from press carousel:" : "Last added to press carousel:";
+}
+
+
+
+  function ensureLastDoneNoticeEl() {
+    const wrap = document.querySelector(".wrap");
+    if (!wrap) return null;
+
+    return ensurePressStatusNotice();
+  }
+
+  function setLastDoneText(filename, mode) {
+  if (!filename) return;
+
+  // Persist for refresh + stability
+  try {
+    localStorage.setItem(
+      LAST_DONE_KEY,
+      JSON.stringify({ filename, mode: (mode || "").toString(), ts: Date.now() })
+    );
+  } catch {}
+
+  const el = ensureLastDoneNoticeEl();
+  if (!el) return;
+
+  const labelEl = el.querySelector(".alexk-press-lastdone-label");
+  if (labelEl) { labelEl.textContent = modeLabel(mode); labelEl.style.display = ""; }
+  const span = el.querySelector(".alexk-press-lastdone-text");
+  if (span) { span.textContent = " " + filename; span.style.display = ""; }
+  const sep = el.querySelector(".alexk-press-sep");
+  if (sep) sep.style.display = "";
+}
+
+
+  // Show whatever we last knew immediately (survives refresh)
+  try {
+    const stored = localStorage.getItem(LAST_DONE_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed?.filename) setLastDoneText(parsed.filename, parsed.mode || "");
+      } catch {
+        // Back-compat: if something old is stored as a string
+        setLastDoneText(stored, "");
+      }
+    }
+  } catch {}
+
+
+  let inFlight = false;
+  let wasActive = false; // tracks if we ever saw an active job during this pump session
+
+  const pumpId = setInterval(async () => {
+    if (inFlight) return; // prevents overlapping calls
+    inFlight = true;
+
+    try {
+      const json = await postAjax("alexk_press_bulk_job_status");
+      const data = json?.data || {};
+
+      // ✅ Update “Last completed” from server truth whenever it changes.
+      const lastDone = (data?.last_completed_filename || "").toString().trim();
+      const modeRaw = ((data?.mode || "") + "").toLowerCase().trim();
+      // If server doesn't provide a mode (common when job ends / no active job),
+      // do NOT overwrite the previously stored mode.
+      let safeMode = "";
+      if (modeRaw) {
+        safeMode = (modeRaw.includes("remove") || modeRaw.includes("delete")) ? "remove" : "add";
+      } else {
+        // Fall back to whatever we last persisted
+        try {
+          const stored = localStorage.getItem(LAST_DONE_KEY);
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed?.mode) safeMode = (parsed.mode + "").toLowerCase();
+          }
+        } catch {}
+      }
+
+      // Only update from server if server data is newer than a local per-item update
+      if (lastDone) {
+        let localTs = 0;
+        try { const s = localStorage.getItem('alexk_press_last_completed'); if (s) localTs = JSON.parse(s)?.ts || 0; } catch {}
+        // Server has no timestamp — only update if nothing newer is in localStorage
+        if (localTs === 0) setLastDoneText(lastDone, safeMode);
+      }
+
+      const total = Number(data?.total ?? 0);
+      const pending = Number(data?.pending ?? 0);
+
+      // No active job → hide progress UI, but keep “Last completed” visible.
+      if (!Number.isFinite(total) || total <= 0) {
+        renderBulkProgress({ total: 0, pending: 0, done: 0 });
+       
+        if (wasActive) {
+          clearInterval(pumpId);
+          document.__alexkPressPump = false;
+
+          // Refresh so PHP-reported counts (like included_count) update immediately
+          if (!window.__alexkPressReloadAfterJob) {
+            window.__alexkPressReloadAfterJob = true;
+            queueNoticeForAfterReload("Press carousel update complete. Count refreshed.", "success");
+            setTimeout(() => window.location.reload(), 150);
+          }
+        }
+
+        return;
+      
+      }
+
+      //Job is active 
+      wasActive = true;
+      renderBulkProgress(data);
+
+      // If finished, stop polling and remove progress notice (keep last-done notice)
+      // 
+      if (Number.isFinite(pending) && pending <= 0) {
+        clearInterval(pumpId);
+        document.__alexkPressPump = false;
+        renderBulkProgress({ total: 0, pending: 0, done: 0 });
+
+        if (!window.__alexkPressReloadAfterJob) {
+            window.__alexkPressReloadAfterJob = true;
+            queueNoticeForAfterReload("Press carousel update complete. Count refreshed.", "success");
+            setTimeout(() => window.location.reload(), 150);
+          }  
+
         return;
       }
-      const count = res.data?.updated ?? ids.length;
-      const label = mode === 'add' ? 'Added' : 'Removed';
-      queueNotice(`${label} ${count} item(s) ${mode === 'add' ? 'to' : 'from'} the press carousel.`);
-      startPolling();
-    });
+    } catch {
+      // swallow errors
+    } finally {
+      inFlight = false;
+    }
+  }, 800);
+}
+
+
+
+  function setWpMediaModelFlag(id, included) {
+    try {
+      const att = window.wp?.media?.attachment?.(id);
+      if (!att || typeof att.set !== "function") return;
+
+      // Our UI flag
+      att.set("alexk_in_press", !!included);
+
+      // The actual meta key used by the checkbox UI
+      att.set("alexk_include_in_press", included ? "1" : "0");
+
+      if (typeof att.trigger === "function") att.trigger("change");
+    } catch {}
   }
 
-  // ---------------------------
-  // Polling / HUD
-  // ---------------------------
-  let pollTimer = null;
 
-  function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(poll, 1200);
-    poll();
+  // If the compat panel is open for this attachment, update the checkbox immediately
+  // without waiting for a server round-trip (stale on cached hosts).
+  function syncOpenCompatCheckbox(id, included) {
+    try {
+      const frame = window.wp?.media?.frame;
+      if (!frame) return;
+      const sel = frame.state?.()?.get?.("selection");
+      if (!sel) return;
+      const first = sel.first?.();
+      if (!first || first.get("id") !== id) return;
+      const cb = document.querySelector(".attachment-compat .alexk-press-main-checkbox");
+      if (!cb) return;
+      cb.checked = !!included;
+      cb.dispatchEvent(new Event("change"));
+    } catch {}
   }
 
-  function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  }
-
-  function poll() {
-    getStatus().then(res => {
-      if (!res.success) return;
-      const data = res.data;
-      const pending = parseInt(data.pending, 10) || 0;
-      const done    = parseInt(data.done, 10) || 0;
-
-      updateHud(data);
-
-      if (pending <= 0 && done > 0) {
-        stopPolling();
-        showQueuedNotice();
+  function updateUiForIds(ids, included) {
+    for (const id of ids) {
+      const tile = document.querySelector(`.attachments .attachment[data-id="${id}"]`);
+      if (tile) {
+        applyIncludedStateToTile(tile, included);
+        try {
+          const att = window.wp?.media?.attachment?.(id);
+          if (att) applyHoverMetaToTile(tile, att);
+        } catch {}
       }
-    });
+      setWpMediaModelFlag(id, included);
+      syncOpenCompatCheckbox(id, included);
+    }
   }
 
-  function updateHud(data) {
-    let hud = document.getElementById('alexk-press-hud');
-    if (!hud) {
-      hud = document.createElement('div');
-      hud.id = 'alexk-press-hud';
-      Object.assign(hud.style, {
-        position: 'fixed', bottom: '12px', right: '12px',
-        zIndex: '999999',
-        background: 'rgba(0,0,0,0.85)', color: '#fff',
-        font: '12px/1.35 system-ui, sans-serif',
-        padding: '10px 14px', borderRadius: '8px',
-        maxWidth: '320px', whiteSpace: 'pre-wrap',
-        boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
-      });
-      document.body.appendChild(hud);
+  // ---------------------------
+  // Toolbar buttons (minimal)
+  // ---------------------------
+  function findToolbarContainer() {
+    const toolbar = $(".media-toolbar.wp-filter") || $(".media-toolbar");
+    if (!toolbar) return null;
+    return $(".media-toolbar-secondary", toolbar) || toolbar;
+  }
+
+  function ensureButtons() {
+    const container = findToolbarContainer();
+    if (!container) return false;
+
+    if (!$("#alexk-add-to-press")) {
+      const add = document.createElement("button");
+      add.id = "alexk-add-to-press";
+      add.type = "button";
+      add.className = "button button-primary";
+      add.textContent = "Add to press carousel";
+      container.append(add);
+      add.addEventListener("click", onAdd);
     }
 
-    const pending = parseInt(data.pending, 10) || 0;
-    const done    = parseInt(data.done, 10)    || 0;
-    const total   = parseInt(data.total, 10)   || 0;
-    const mode    = data.mode === 'remove' ? 'Removing' : 'Processing';
-    const fn      = data.current_filename || data.last_completed_filename || '';
+    if (!$("#alexk-remove-from-press")) {
+      const rm = document.createElement("button");
+      rm.id = "alexk-remove-from-press";
+      rm.type = "button";
+      rm.className = "button";
+      rm.textContent = "Remove from press carousel";
+      container.append(rm);
+      rm.addEventListener("click", onRemove);
+    }
 
-    if (pending <= 0 && done === 0) {
-      hud.remove();
+    return true;
+  }
+
+  function updateButtonsVisibility() {
+    const add = $("#alexk-add-to-press");
+    const rm = $("#alexk-remove-from-press");
+    if (!add || !rm) return;
+
+    // Never show outside Bulk Select mode
+    if (!isBulkModeActive()) {
+      add.style.display = "none";
+      rm.style.display = "none";
       return;
     }
 
-    const lines = [
-      `Press carousel — ${mode}`,
-      `Progress: ${done} / ${total}`,
-    ];
-    if (fn) lines.push(`File: ${fn}`);
-    if (pending <= 0) lines.push('✓ Done');
-
-    hud.textContent = lines.join('\n');
-
-    if (pending <= 0) {
-      setTimeout(() => { if (hud.parentNode) hud.remove(); }, 3000);
-    }
+    const { inCarousel, notInCarousel } = partitionSelection();
+    add.style.display = notInCarousel.length ? "" : "none";
+    rm.style.display = inCarousel.length ? "" : "none";
   }
 
   // ---------------------------
-  // Wire into wp.media events
+  // Click handlers
   // ---------------------------
-  function wireMediaLibrary() {
+
+    async function onAdd() {
+    const { inCarousel, notInCarousel } = partitionSelection();
+    const toAdd = notInCarousel;
+    const skipped = inCarousel;
+
+    if (!toAdd.length) {
+      alert("All selected items are already in the press carousel.");
+      return;
+    }
+
+    const msg = skipped.length
+      ? `Add ${toAdd.length} item(s) to the press carousel?\n\nSkipping ${skipped.length} already included.`
+      : `Add ${toAdd.length} item(s) to the press carousel?`;
+
+    if (!confirm(msg)) return;
+
+    let json;
+    try {
+      json = await postAjax("alexk_press_bulk_add", toAdd);
+    } catch {
+      showWpNotice("Bulk add failed (network).", "error");
+      return;
+    }
+
+    if (!json?.success) {
+      showWpNotice(json?.data?.message || "Bulk add failed.", "error");
+      return;
+    }
+
+    // Update UI immediately (don’t wait for generation)
+    updateUiForIds(toAdd, true);
+
+    // Exit bulk select immediately so checkmarks clear and UI is responsive
+    exitBulkSelectMode();
+    updateButtonsVisibility();
+
+    // Start polling so the queued job actually advances + progress notice updates
+    startBulkProgressPump();
+
+    // Visible feedback without reload
+    showWpNotice(`Queued ${json?.data?.updated ?? toAdd.length} item(s) to add to the press carousel.`, "success", 12000);
+
+  }
+
+  async function onRemove() {
+    const { inCarousel, notInCarousel } = partitionSelection();
+    const toRemove = inCarousel;
+    const skipped = notInCarousel;
+
+    if (!toRemove.length) {
+      alert("None of the selected items are currently in the press carousel.");
+      return;
+    }
+
+    const msg = skipped.length
+      ? `Remove ${toRemove.length} item(s) from the press carousel?\n\nSkipping ${skipped.length} not in press carousel.`
+      : `Remove ${toRemove.length} item(s) from the press carousel?`;
+
+    if (!confirm(msg)) return;
+
+    let json;
+    try {
+      json = await postAjax("alexk_press_bulk_remove", toRemove);
+    } catch {
+      showWpNotice("Bulk remove failed (network).", "error");
+      return;
+    }
+
+    if (!json?.success) {
+      showWpNotice(json?.data?.message || "Bulk remove failed.", "error");
+      return;
+    }
+
+    // Update UI immediately (don’t wait for deletion)
+    updateUiForIds(toRemove, false);
+
+    // Exit bulk select immediately so checkmarks clear and UI is responsive
+    exitBulkSelectMode();
+    updateButtonsVisibility();
+
+    // Start polling so the queued job actually advances + progress notice updates
+    startBulkProgressPump();
+
+    // Visible feedback without reload
+    showWpNotice(`Queued ${json?.data?.updated ?? toRemove.length} item(s) to add to the press carousel.`, "success", 12000);
+
+  }
+
+
+  // NEw Progress UI 
+  async function startHudJob(mode, attachmentIds) {
+  const form = new FormData();
+  form.append("action", "alexk_job_start");
+  form.append("mode", mode);
+  attachmentIds.forEach((id) => form.append("attachment_ids[]", String(id)));
+
+  const res = await fetch(window.ajaxurl, {
+    method: "POST",
+    body: form,
+    credentials: "same-origin",
+  });
+
+  return res.json();
+}
+
+
+  // ---------------------------
+  // Observers (small)
+  // ---------------------------
+  function bindObservers() {
+    // Selection changes happen via clicks in the grid
+    document.addEventListener(
+      "click",
+      (e) => {
+        const t = e.target;
+        if (!(t instanceof HTMLElement)) return;
+
+        if (t.closest(".attachments") || t.closest("button.select-mode-toggle-button")) {
+          setTimeout(updateButtonsVisibility, 30);
+        }
+      },
+      true
+    );
+
+    // Toggle button text changes (Bulk select <-> Cancel)
+    const toggle = $("button.select-mode-toggle-button");
+    if (toggle) {
+      const mo = new MutationObserver(() => updateButtonsVisibility());
+      mo.observe(toggle, { childList: true, subtree: true, attributes: true });
+    }
+
+    // WP may re-render toolbar/tiles; re-ensure buttons and state
+    const domMo = new MutationObserver(() => {
+      ensureButtons();
+      updateButtonsVisibility();
+    });
+    domMo.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+ function boot() {
+  // Notices (if you ever re-enable "after reload" messaging)
+  try {
+    showQueuedNoticeIfAny();
+  } catch (e) {
+    console.error("ALEXK boot: showQueuedNoticeIfAny failed", e);
+  }
+
+
+  // Carousel count (admin notice)
+  showPressIncludedCountNotice();
+
+  // Patch tile rendering so dots + alexk-in-press class reflect REAL model state.
+  // Without this, tiles can say "not in press carousel" while folders exist (and vice versa).
+  try {
     if (!patchWpMediaAttachmentRender()) {
       const mo = new MutationObserver(() => {
         try {
           if (patchWpMediaAttachmentRender()) mo.disconnect();
-        } catch (e) {}
+        } catch (e) {
+          console.error("ALEXK boot: patchWpMediaAttachmentRender retry failed", e);
+        }
       });
       mo.observe(document.documentElement, { childList: true, subtree: true });
     }
-
-    const syncBulkBar = () => {
-      if (!bulkToolbar) return;
-      const isBulk = !!document.querySelector('.media-toolbar .bulk-select-button.active, .media-toolbar .bulk-select .active');
-      bulkToolbar.style.display = isBulk ? '' : 'none';
-    };
-    if (window.wp?.media?.frame) {
-      wp.media.frame.on('content:activate', syncBulkBar);
-    }
+  } catch (e) {
+    console.error("ALEXK boot: patchWpMediaAttachmentRender failed", e);
   }
 
-  // ---------------------------
-  // Boot
-  // ---------------------------
-  function boot() {
-    showQueuedNotice();
+  // Keep dot state consistent when closing single attachment view
+  try {
     bindReloadOnExitSingleViewOnce();
-    ensureBulkButtons();
-    wireMediaLibrary();
-
-    getStatus().then(res => {
-      if (res.success && (parseInt(res.data?.pending, 10) || 0) > 0) {
-        startPolling();
-      }
-    });
+  } catch (e) {
+    console.error("ALEXK boot: bindReloadOnExitSingleViewOnce failed", e);
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
+  // Buttons + observers
+  try {
+    ensureButtons();
+  } catch (e) {
+    console.error("ALEXK boot: ensureButtons failed", e);
   }
+
+  try {
+    updateButtonsVisibility();
+  } catch (e) {
+    console.error("ALEXK boot: updateButtonsVisibility failed", e);
+  }
+
+  try {
+    bindObservers();
+  } catch (e) {
+    console.error("ALEXK boot: bindObservers failed", e);
+  }
+
+  // Always start the pump on page load so refresh does NOT "clear" progress.
+  // If there is no active job, renderBulkProgress() will hide UI.
+  try {
+    startBulkProgressPump();
+  } catch (e) {
+    console.error("ALEXK boot: startBulkProgressPump failed", e);
+  }
+}
+
+
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
 })();
