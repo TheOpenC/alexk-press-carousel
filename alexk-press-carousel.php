@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Alex K - Press Carousel v1
+ * Plugin Name: Alex K -- Press Carousel v1
  * Description: Press article carousel. Bulk add / remove from grid and list view. Text-optimised responsive image conversion. Forward-only shuffle with press link. 1.0.0
  * Version: 1.0.0
  */
